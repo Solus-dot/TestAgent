@@ -1,0 +1,17 @@
+# 1. Ignore the actual Virtual Environment folder
+.venv/
+venv/
+env/
+
+# 2. Ignore Python compilation files (The "__pycache__" junk)
+__pycache__/
+*.py[cod]
+
+# 3. Ignore Mac system files
+.DS_Store
+
+# 4. Ignore Environment Variables (Safety for API Keys)
+.env
+
+# 5. Keep the uv lock file (This ensures we use the exact same versions)
+!uv.lock
