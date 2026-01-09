@@ -2,11 +2,19 @@ from typing import Any
 import webbrowser
 import imaplib
 import email
+from dotenv import load_dotenv
+import os
 from mcp.server.fastmcp import FastMCP
 import yt_dlp
 
 # Initialize the MCP Server
 mcp = FastMCP("MyLocalAgentTools")
+
+# Extract .env variables
+load_dotenv()
+EMAIL_USER = os.getenv('EMAIL_USER')
+EMAIL_PASS = os.getenv('EMAIL_PASS')
+IMAP_SERVER = os.getenv('IMAP_SERVER')
 
 # --- Define Tools ---
 
@@ -55,9 +63,83 @@ def play_youtube(topic: str) -> str:
 
 @mcp.tool()
 def read_latest_email(count: int = 1) -> str:
-    """Reads the latest email subjects from Gmail."""
-    # (Simplified for brevity - insert your full IMAP logic here)
-    return "From: Boss | Subject: Project Orion Update"
+    """
+    Fetches the latest N emails from your inbox.
+    Returns sender, subject, and a preview of the body text.
+    """
+    print(f"  > [Tool] Fetching last {count} email(s)...")
+    
+    try:
+        # Connect and authenticate
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
+        
+        # Search for all messages (or use "UNSEEN" for unread only)
+        status, messages = mail.search(None, "ALL")
+        if status != "OK":
+            return "Failed to search inbox."
+        
+        email_ids = messages[0].split()
+        if not email_ids:
+            return "Your inbox is empty."
+        
+        # Grab the most recent N emails
+        latest_ids = email_ids[-count:]
+        results = []
+        
+        # Process each email (newest first)
+        for e_id in reversed(latest_ids):
+            _, msg_data = mail.fetch(e_id, "(RFC822)")
+            
+            for response_part in msg_data:
+                if not isinstance(response_part, tuple):
+                    continue
+                
+                msg = email.message_from_bytes(response_part[1])
+                
+                # Decode the subject line
+                subject_header = email.header.decode_header(msg["Subject"])[0]
+                subject = subject_header[0]
+                if isinstance(subject, bytes):
+                    encoding = subject_header[1] or "utf-8"
+                    subject = subject.decode(encoding, errors="ignore")
+                
+                sender = msg.get("From", "Unknown Sender")
+                
+                # Extract plain text body
+                body = ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            payload = part.get_payload(decode=True)
+                            if payload:
+                                body = payload.decode(errors="ignore")
+                                break
+                else:
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        body = payload.decode(errors="ignore")
+                
+                # Trim body to avoid overwhelming the LLM with huge emails
+                body_preview = body.strip()[:500]
+                if len(body.strip()) > 500:
+                    body_preview += "..."
+                
+                results.append(
+                    f"📩 FROM: {sender}\n"
+                    f"SUBJECT: {subject}\n"
+                    f"BODY: {body_preview}"
+                )
+        
+        mail.logout()
+        return "\n\n".join(results) if results else "No emails found."
+    
+    except imaplib.IMAP4.error as e:
+        return f"IMAP error: {e}. Check your email/password and IMAP settings."
+    except Exception as e:
+        print(f"  > [Tool Error] {e}")
+        return f"Unexpected error: {e}"
 
 if __name__ == "__main__":
     # This runs the server over Stdio (Standard Input/Output)
