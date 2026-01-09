@@ -1,60 +1,46 @@
 #!/bin/bash
 
-# Config
-MODEL_DIR="$HOME/.lmstudio/models"
-HOST="127.0.0.1"
+# --- Configuration ---
 PORT="6767"
 DEFAULT_CTX="8192"
 
-echo "Scanning for .gguf models in $MODEL_DIR..."
-models=()
-while IFS= read -r -d '' file; do
-    models+=("$file")
-done < <(find "$MODEL_DIR" -type f -name "*.gguf" -print0)
-
-# Check if we found any models
-if [ ${#models[@]} -eq 0 ]; then
-    echo "Error: No .gguf files found in $MODEL_DIR"
+# 1. Check for LMS CLI
+if ! command -v lms &> /dev/null; then
+    echo "Error: 'lms' command not found."
+    echo "Please install LM Studio and run: 'lms bootstrap'"
     exit 1
 fi
 
-echo "Found the following models:"
-for i in "${!models[@]}"; do
-    # Just show the filename, not the full path, for readability
-    filename=$(basename "${models[$i]}")
-    echo "[$((i+1))] $filename"
-done
+# 2. Start/Ensure Server is Running
+echo "--- LM Studio Server Setup ---"
+lms server start --port "$PORT" > /dev/null 2>&1
 
-echo ""
-read -p "Select a model (enter number): " selection
-index=$((selection-1))
+# 3. Unload old models (Clean slate)
+lms unload --all > /dev/null 2>&1
 
-if [[ -z "${models[$index]}" ]]; then
-    echo "Invalid selection. Exiting."
-    exit 1
-fi
-
-SELECTED_MODEL="${models[$index]}"
-echo "Selected: $(basename "$SELECTED_MODEL")"
-
-echo ""
+# 4. Ask for Context Length
 read -p "Enter context length (default: $DEFAULT_CTX): " ctx_input
+CTX_LENGTH=${ctx_input:-$DEFAULT_CTX}
 
-if [[ -z "$ctx_input" ]]; then
-    CTX_LENGTH=$DEFAULT_CTX
-else
-    CTX_LENGTH=$ctx_input
-fi
-
+# 5. Load Model (Interactive)
+# We run 'lms load' without a model name, which triggers the menu.
+# We pass the flags so they apply to whatever model you pick.
 echo ""
-echo "Starting llama-server on $HOST:$PORT..."
-echo "Model: $SELECTED_MODEL"
-echo "Context: $CTX_LENGTH"
-echo "----------------------------------------"
+echo "Select your model from the menu below:"
+echo "-------------------------------------"
 
-llama-server \
-    -m "$SELECTED_MODEL" \
-    -c "$CTX_LENGTH" \
-    --host "$HOST" \
-    --port "$PORT" \
-    --n-gpu-layers 99
+lms load \
+    --context-length "$CTX_LENGTH" \
+    --gpu max \
+    --identifier "TestAgent-Model"
+
+# 6. Stream Logs
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ Server is ready at http://127.0.0.1:$PORT"
+    echo "   (Ctrl+C will stop watching logs, but server keeps running)"
+    echo "--- Server Logs ---"
+    lms log stream
+else
+    echo "❌ Failed to load model."
+fi
