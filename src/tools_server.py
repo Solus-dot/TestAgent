@@ -2,6 +2,8 @@ from typing import Any
 import webbrowser
 import imaplib
 import email
+import requests
+import psutil
 from dotenv import load_dotenv
 import os
 from mcp.server.fastmcp import FastMCP
@@ -61,10 +63,10 @@ def play_youtube(topic: str) -> str:
         webbrowser.open(fallback_url)
         return f"I encountered an error trying to play the video directly ({str(e)}), so I opened the search results instead."
 
+
 @mcp.tool()
 def read_latest_email(count: int = 1) -> str:
-    """ Fetches the latest N emails from your inbox. Returns sender, subject, and a preview of the body text.
-    """
+    """Fetches the latest N emails from your inbox. Returns sender, subject, and a preview of the body text."""
     print(f"  > [Tool] Fetching last {count} email(s)...")
     
     try:
@@ -138,6 +140,44 @@ def read_latest_email(count: int = 1) -> str:
     except Exception as e:
         print(f"  > [Tool Error] {e}")
         return f"Unexpected error: {e}"
+
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a specific city using wttr.in."""
+    print(f"  > [Tool] Checking weather for: {city}...")
+    try:
+        # format=3 gives a one-line output like: "Paris: ⛅️ +12°C"
+        url = f"https://wttr.in/{city}?format=3"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            return response.text.strip()
+        else:
+            return "Could not fetch weather data."
+    except Exception as e:
+        print(f"  > [Tool Error] {e}")
+        return f"Error connecting to weather service: {e}"
+    
+
+@mcp.tool()
+def get_system_stats() -> str:
+    """Checks the current CPU and RAM usage of the computer."""
+    print(f"  > [Tool] Fetching CPU and RAM stats...")
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        # Convert bytes to GB
+        total_mem_gb = memory.total / (1024 ** 3)
+        used_mem_gb = memory.used / (1024 ** 3)
+        
+        return (f"CPU Usage: {cpu_percent}%\n"
+                f"RAM Usage: {used_mem_gb:.1f}GB / {total_mem_gb:.1f}GB ({memory.percent}%)")
+    except Exception as e:
+        print(f"  > [Tool Error] {e}")
+        return f"Unexpected error: {e}"
+
 
 if __name__ == "__main__":
     # This runs the server over Stdio (Standard Input/Output)
