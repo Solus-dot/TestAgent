@@ -37,10 +37,10 @@ lms load \
 # 6. Stream Logs
 if [ $? -eq 0 ]; then
     echo ""
-    echo "✅ Server is ready at http://127.0.0.1:$PORT"
-    echo "   (Ctrl+C will stop watching logs, but server keeps running)"
+    echo "Server is ready at http://127.0.0.1:$PORT"
+    echo "(Ctrl+C will stop watching logs, but server keeps running)"
     echo "--- Server Logs ---"
-    lms log stream --source model --stats --json --filter input,output | jq -C '.'
+    lms log stream --source model --stats --json --filter input,output | uv run src/format_logs.py
 else
-    echo "❌ Failed to load model."
+    echo "Failed to load model."
 fi
