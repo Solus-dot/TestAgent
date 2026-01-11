@@ -63,9 +63,7 @@ def play_youtube(topic: str) -> str:
 
 @mcp.tool()
 def read_latest_email(count: int = 1) -> str:
-    """
-    Fetches the latest N emails from your inbox.
-    Returns sender, subject, and a preview of the body text.
+    """ Fetches the latest N emails from your inbox. Returns sender, subject, and a preview of the body text.
     """
     print(f"  > [Tool] Fetching last {count} email(s)...")
     

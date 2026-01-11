@@ -40,7 +40,7 @@ if [ $? -eq 0 ]; then
     echo "✅ Server is ready at http://127.0.0.1:$PORT"
     echo "   (Ctrl+C will stop watching logs, but server keeps running)"
     echo "--- Server Logs ---"
-    lms log stream
+    lms log stream --source model --stats --json --filter input,output | jq -C '.'
 else
     echo "❌ Failed to load model."
 fi
