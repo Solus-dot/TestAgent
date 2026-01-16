@@ -6,8 +6,13 @@ import requests
 import psutil
 from dotenv import load_dotenv
 import os
+import sys
 from mcp.server.fastmcp import FastMCP
 import yt_dlp
+
+# Add parent directory to path to import memory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from memory import VectorMemory
 
 # Initialize the MCP Server
 mcp = FastMCP("MyLocalAgentTools")
@@ -18,15 +23,154 @@ EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_PASS = os.getenv('EMAIL_PASS')
 IMAP_SERVER = os.getenv('IMAP_SERVER')
 
-# --- Define Tools ---
+# Initialize memory system directly in the tools server
+MEMORY_PATH = os.getenv('MEMORY_PATH', 'agent_memory.pkl')
+memory_system = VectorMemory(storage_path=MEMORY_PATH)
+
+print(f"[TOOLS SERVER] Memory system initialized with {len(memory_system.memories)} memories")
+
+# --- Memory Tools ---
+
+@mcp.tool()
+def store_memory(text: str, memory_type: str = "fact", importance: str = "normal") -> str:
+    """
+    Store information in long-term memory for future recall.
+    Use this when the user shares important information about themselves, their preferences,
+    or asks you to remember something specific.
+    
+    Args:
+        text: The information to remember (be specific and clear)
+        memory_type: Type of memory - "fact" (general info), "preference" (likes/dislikes),
+                     "identity" (name, job, personal details), "goal" (user's objectives)
+        importance: How important is this - "low", "normal", "high"
+    
+    Returns:
+        Confirmation message
+    
+    Examples:
+        - User says "My name is Alex" -> store_memory("User's name is Solus", "identity", "high")
+        - User says "I love pizza" -> store_memory("User loves pizza", "preference", "normal")
+        - User says "Remember I'm learning Python" -> store_memory("User is learning Python", "goal", "normal")
+    """
+    try:
+        metadata = {
+            "importance": importance,
+            "stored_by": "llm"
+        }
+        
+        memory_system.add(text, metadata=metadata, memory_type=memory_type)
+        return f"[MEMORY TOOL] Stored: '{text[:50]}...' ({memory_type}, {importance})"
+    except Exception as e:
+        return f"[MEMORY TOOL ERROR] Failed to store: {e}"
+    
+@mcp.tool()
+def recall_memory(query: str, memory_type: str = None, top_k: int = 3) -> str:
+    """
+    Search long-term memory for relevant information.
+    Use this when you need context about the user's previous conversations, preferences, or facts.
+    
+    Args:
+        query: What to search for (be specific about what information you need)
+        memory_type: Optional filter - "fact", "preference", "identity", "goal", or None for all types
+        top_k: How many relevant memories to retrieve (1-5)
+    
+    Returns:
+        Relevant memories with relevance scores
+    
+    Examples:
+        - User asks "What's my name?" -> recall_memory("user's name", "identity", 1)
+        - User asks "What do I like?" -> recall_memory("user likes preferences", "preference", 3)
+        - User asks about past conversation -> recall_memory("previous topic", None, 5)
+    """
+    try:
+        # Reload from disk to get latest memories
+        memory_system.load()
+        
+        results = memory_system.search(query, top_k=top_k, memory_type=memory_type, min_score=0.3)
+        
+        if not results:
+            return f"[MEMORY TOOL] No relevant memories found for '{query}'"
+        
+        output = f"[MEMORY TOOL] Found {len(results)} relevant memories:\n\n"
+        for i, mem in enumerate(results, 1):
+            output += f"{i}. [{mem['type']}] {mem['text']} (score: {mem['score']:.2f})\n"
+        
+        return output
+    except Exception as e:
+        return f"[MEMORY TOOL ERROR] Failed to recall: {e}"
+    
+@mcp.tool()
+def list_recent_memories(count: int = 5, memory_type: str = None) -> str:
+    """
+    List the most recent memories stored.
+    
+    Args:
+        count: How many recent memories to show (1-10)
+        memory_type: Optional filter by type
+    
+    Returns:
+        List of recent memories
+    """
+    try:
+        # Reload from disk to get latest memories
+        memory_system.load()
+        
+        memories = memory_system.memories
+        
+        if memory_type:
+            memories = [m for m in memories if m["type"] == memory_type]
+        
+        if not memories:
+            return f"[MEMORY TOOL] No memories found" + (f" of type '{memory_type}'" if memory_type else "")
+        
+        # Sort by timestamp (newest first)
+        sorted_memories = sorted(memories, key=lambda x: x["timestamp"], reverse=True)[:count]
+        
+        output = f"📝 {len(sorted_memories)} most recent memories:\n\n"
+        for i, mem in enumerate(sorted_memories, 1):
+            import time
+            age = (time.time() - mem["timestamp"]) / 60  # minutes
+            if age < 60:
+                age_str = f"{age:.0f}m ago"
+            else:
+                age_str = f"{age/60:.1f}h ago"
+            
+            output += f"{i}. [{mem['type']}] {mem['text']} ({age_str})\n"
+        
+        return output
+    except Exception as e:
+        return f"[MEMORY TOOL ERROR] Failed to list: {e}"
+
+@mcp.tool()
+def forget_memory(memory_id: int) -> str:
+    """
+    Delete a specific memory by ID.
+    Use when user asks to forget something or if information is outdated.
+    
+    Args:
+        memory_id: The ID of the memory to delete (get this from list_recent_memories)
+    
+    Returns:
+        Confirmation message
+    """
+    try:
+        # Reload from disk to get latest memories
+        memory_system.load()
+        
+        success = memory_system.delete(memory_id)
+        if success:
+            return f"[MEMORY TOOL] Deleted memory #{memory_id}"
+        else:
+            return f"[MEMORY TOOL] Memory #{memory_id} not found"
+    except Exception as e:
+        return f"[MEMORY TOOL] Failed to delete: {e}"
+
+# --- Other Tools ---
 
 @mcp.tool()
 def play_youtube(topic: str) -> str:
     """Searches YouTube for the topic and plays the first video found."""
-
-    print(f"  > [Tool] Searching YouTube for: {topic}...")
-
-    # Define a fallback URL (Search Results) in case the direct play fails
+    print(f"[TOOL] Searching YouTube for: {topic}...")
     fallback_url = f"https://www.youtube.com/results?search_query={topic.replace(' ', '+')}"
     
     try:
@@ -35,7 +179,7 @@ def play_youtube(topic: str) -> str:
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
-            'default_search': 'ytsearch1'  # Search for 1 result
+            'default_search': 'ytsearch1'
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -51,15 +195,13 @@ def play_youtube(topic: str) -> str:
             title = video.get('title', 'Unknown Title')
             video_url = video.get('url') or f"https://www.youtube.com/watch?v={video['id']}"
             
-            # Open the video URL
-            print(f"  > [Tool] Playing: {title}")
+            print(f"[TOOL] Playing: {title}")
             webbrowser.open(video_url)
             
             return f"Success: Now playing '{title}' in the browser."
     
     except Exception as e:
-        # Fallback: If anything crashes, open the search page
-        print(f"  > [Tool Error] {e}")
+        print(f"[TOOL ERROR] {e}")
         webbrowser.open(fallback_url)
         return f"I encountered an error trying to play the video directly ({str(e)}), so I opened the search results instead."
 
@@ -67,7 +209,7 @@ def play_youtube(topic: str) -> str:
 @mcp.tool()
 def read_latest_email(count: int = 1) -> str:
     """Fetches the latest N emails from your inbox. Returns sender, subject, and a preview of the body text."""
-    print(f"  > [Tool] Fetching last {count} email(s)...")
+    print(f"[TOOL] Fetching last {count} email(s)...")
     
     try:
         # Connect and authenticate
@@ -138,14 +280,14 @@ def read_latest_email(count: int = 1) -> str:
     except imaplib.IMAP4.error as e:
         return f"IMAP error: {e}. Check your email/password and IMAP settings."
     except Exception as e:
-        print(f"  > [Tool Error] {e}")
+        print(f"[TOOL ERROR] {e}")
         return f"Unexpected error: {e}"
 
 
 @mcp.tool()
 def get_weather(city: str) -> str:
     """Get the current weather for a specific city using wttr.in."""
-    print(f"  > [Tool] Checking weather for: {city}...")
+    print(f"[TOOL] Checking weather for: {city}...")
     try:
         # format=3 gives a one-line output like: "Paris: ⛅️ +12°C"
         url = f"https://wttr.in/{city}?format=3"
@@ -156,14 +298,14 @@ def get_weather(city: str) -> str:
         else:
             return "Could not fetch weather data."
     except Exception as e:
-        print(f"  > [Tool Error] {e}")
+        print(f"[TOOL ERROR] {e}")
         return f"Error connecting to weather service: {e}"
     
 
 @mcp.tool()
 def get_system_stats() -> str:
     """Checks the current CPU and RAM usage of the computer."""
-    print(f"  > [Tool] Fetching CPU and RAM stats...")
+    print(f"[TOOL] Fetching CPU and RAM stats...")
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -175,7 +317,7 @@ def get_system_stats() -> str:
         return (f"CPU Usage: {cpu_percent}%\n"
                 f"RAM Usage: {used_mem_gb:.1f}GB / {total_mem_gb:.1f}GB ({memory.percent}%)")
     except Exception as e:
-        print(f"  > [Tool Error] {e}")
+        print(f"[TOOL ERROR] {e}")
         return f"Unexpected error: {e}"
 
 

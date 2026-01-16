@@ -1,25 +1,36 @@
 import asyncio
+import os
 from openai import OpenAI
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Connect to the LMStudio Server
+# Set environment variable for memory path (so tools_server.py uses same file)
+MEMORY_PATH = "agent_memory.pkl"
+os.environ['MEMORY_PATH'] = MEMORY_PATH
+
+# Import after setting env var
+from memory import VectorMemory
+
+# Connect to the Llama Server
 llm_client = OpenAI(base_url="http://127.0.0.1:6767/v1", api_key="TestAgent")
 
 # Define connection to the MCP Server
+script_dir = os.path.dirname(os.path.abspath(__file__))
 server_params = StdioServerParameters(
     command="python3", 
-    args=["src/tools_server.py"],
+    args=[os.path.join(script_dir, "tools_server.py")],
+    env={**os.environ, 'MEMORY_PATH': MEMORY_PATH}  # Pass env var to subprocess
 )
+
+# Initialize memory system (same file as tools_server)
+memory = VectorMemory(storage_path=MEMORY_PATH)
 
 async def run_agent():
     print("--- MCP Agent Connecting... ---")
     
-    # Connect to the MCP Server
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             
-            # Initialize and check server for tool list
             await session.initialize()
             mcp_tools_list = await session.list_tools()
             
@@ -36,34 +47,80 @@ async def run_agent():
                 })
             
             print(f"Loaded {len(openai_tools)} tools from MCP server.")
+            print(f"Memory tools: store_memory, recall_memory, list_recent_memories, forget_memory")
             
             # The Chat Loop
-            history = [{"role": "system", "content": """You are a helpful assistant with access to tools. When you call a tool and receive results, use those results to answer the user's question. Never say you can't access something if a tool has already provided the information."""}]
+            history = []
+            
+            # Enhanced system prompt
+            system_prompt = """You are a helpful assistant with access to tools, including a long-term memory system.
+
+MEMORY USAGE GUIDELINES:
+- When users share personal information (name, preferences, facts), use store_memory() to remember it
+- Before answering questions about the user, use recall_memory() to check what you know
+- Be proactive: if something seems worth remembering, store it without asking
+- When recalling, search with specific queries (e.g., "user's name" not just "name")
+
+MEMORY TYPES:
+- identity: Name, age, job, location, personal details
+- preference: Likes, dislikes, favorites, opinions
+- fact: General information, skills, experiences
+- goal: User's objectives, projects, learning goals
+
+Examples:
+- User: "My name is Alex" → store_memory("User's name is Alex", "identity", "high")
+- User: "What's my name?" → recall_memory("user's name", "identity", 1) first, then respond
+- User: "I love Python" → store_memory("User loves Python programming", "preference", "normal")
+
+Always use recall_memory() before claiming you don't know something about the user."""
             
             while True:
                 user_input = input("\nYou: ")
-                if user_input.lower() in ["quit", "exit"]: break
+                if user_input.lower() in ["quit", "exit"]: 
+                    break
                 
-                history.append({"role": "user", "content": user_input})
+                # Special memory commands
+                if user_input.lower().startswith("/memory"):
+                    handle_memory_command(user_input)
+                    continue
+                
+                messages = [{"role": "system", "content": system_prompt}]
+                messages.extend(history)
+                messages.append({"role": "user", "content": user_input})
 
                 # Ask LLM
                 response = llm_client.chat.completions.create(
                     model="local-model",
-                    messages=history,
+                    messages=messages,
                     tools=openai_tools,
                     tool_choice="auto"
                 )
 
                 msg = response.choices[0].message
-                history.append(msg)
-
-                # Check for Tool Calls
+                history.append({"role": "user", "content": user_input})
+                
+                # Handle tool calls
                 if msg.tool_calls:
+                    history.append({
+                        "role": "assistant",
+                        "content": msg.content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            } for tc in msg.tool_calls
+                        ]
+                    })
+                    
                     for tool_call in msg.tool_calls:
                         fname = tool_call.function.name
-                        fargs = tool_call.function.arguments # JSON string
+                        fargs = tool_call.function.arguments
                         
-                        print(f"⚙️  MCP Call: {fname}({fargs})")
+                        print(f"⚙️ MCP Call: {fname}({fargs})")
 
                         # Execute via MCP Protocol
                         # We parse the arguments into a dict
@@ -75,9 +132,8 @@ async def run_agent():
                         # Feed result back to LLM
                         # MCP returns a list of content (text/images). We grab the text.
                         tool_output = result.content[0].text
-                        print(f"  > [Tool Output]: {tool_output}")
+                        print(f"  > Result: {tool_output[:200]}...")
 
-                        
                         history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
@@ -87,11 +143,75 @@ async def run_agent():
                     # Final LLM Response
                     final = llm_client.chat.completions.create(
                         model="local-model",
-                        messages=history
+                        messages=messages + [
+                            {
+                                "role": "assistant",
+                                "content": msg.content,
+                                "tool_calls": [
+                                    {
+                                        "id": tc.id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments
+                                        }
+                                    } for tc in msg.tool_calls
+                                ]
+                            }
+                        ] + [
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result.content[0].text
+                            } for tc in msg.tool_calls
+                        ]
                     )
-                    print(f"Agent: {final.choices[0].message.content}")
+                    assistant_response = final.choices[0].message.content
+                    print(f"Agent: {assistant_response}")
+                    history.append({"role": "assistant", "content": assistant_response})
                 else:
-                    print(f"Agent: {msg.content}")
+                    assistant_response = msg.content
+                    print(f"Agent: {assistant_response}")
+                    history.append({"role": "assistant", "content": assistant_response})
+
+def handle_memory_command(command: str):
+    """Handle special memory commands"""
+    # Reload memory to get latest from disk
+    memory.load()
+    
+    parts = command.split()
+    
+    if len(parts) == 1 or parts[1] == "stats":
+        stats = memory.get_stats()
+        print("\n📊 Memory Statistics:")
+        print(f"Total memories: {stats['total_memories']}")
+        if stats['total_memories'] > 0:
+            print(f"Oldest: {stats['oldest']['text']} ({stats['oldest']['age_days']:.1f} days old)")
+            print(f"Newest: {stats['newest']['text']} ({stats['newest']['age_days']:.1f} days old)")
+            print(f"Most accessed: {stats['most_accessed']['text']} ({stats['most_accessed']['count']} times)")
+            print(f"Types: {stats['types']}")
+    
+    elif parts[1] == "search" and len(parts) > 2:
+        query = " ".join(parts[2:])
+        results = memory.search(query, top_k=5)
+        print(f"\n🔍 Search results for '{query}':")
+        for r in results:
+            print(f"  [{r['score']:.2f}] {r['text']}")
+    
+    elif parts[1] == "export":
+        memory.export_txt()
+    
+    elif parts[1] == "clear":
+        confirm = input("Are you sure you want to clear ALL memories? (yes/no): ")
+        if confirm.lower() == "yes":
+            memory.clear()
+    
+    else:
+        print("\nMemory commands:")
+        print("  /memory stats - Show memory statistics")
+        print("  /memory search <query> - Search memories")
+        print("  /memory export - Export memories to text file")
+        print("  /memory clear - Clear all memories")
 
 if __name__ == "__main__":
     asyncio.run(run_agent())
