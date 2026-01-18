@@ -5,7 +5,7 @@ Run this script to start the AI agent.
 """
 
 import asyncio
-from agent.main import run_agent
+from agent.main_agent import run_agent
 
 if __name__ == "__main__":
     asyncio.run(run_agent())
