@@ -45,12 +45,12 @@ You need two terminal windows open.
 **Terminal 1 - The Model Server:** This script starts the LM Studio server and lets you select a model.
 
 ```bash
-./llmServer.sh
+./scripts/llmServer.sh
 # Follow the prompts to select a model (e.g., Llama 3, Qwen)
 ```
 
 **Terminal 2 - The Agent Client:** This runs your Python agent which connects to the server and handles tools.
 
 ```bash
-uv run src/main.py
+uv run main.py
 ```
