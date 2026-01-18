@@ -16,6 +16,5 @@ __pycache__/
 # 5. Keep the uv lock file (This ensures we use the exact same versions)
 !uv.lock
 
-# Ignore the memory file
-agent_memory.pkl
-memories_export.txt
+# Ignore the memories folder
+memories/

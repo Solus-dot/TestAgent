@@ -11,8 +11,8 @@ from mcp.server.fastmcp import FastMCP
 import yt_dlp
 
 # Add parent directory to path to import memory
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from memory import VectorMemory
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.memory import VectorMemory
 
 # Initialize the MCP Server
 mcp = FastMCP("MyLocalAgentTools")

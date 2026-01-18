@@ -1,15 +1,21 @@
 import asyncio
 import os
+import re
+import sys
 from openai import OpenAI
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+# Add parent directories to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Set environment variable for memory path (so tools_server.py uses same file)
 MEMORY_PATH = 'memories/agent_memory.pkl'
 os.environ['MEMORY_PATH'] = MEMORY_PATH
 
 # Import after setting env var
-from memory import VectorMemory
+from core.memory import VectorMemory
+from core.prompts import SYSTEM_PROMPT
 
 # Connect to the Llama Server
 llm_client = OpenAI(base_url="http://127.0.0.1:6767/v1", api_key="TestAgent")
@@ -18,12 +24,54 @@ llm_client = OpenAI(base_url="http://127.0.0.1:6767/v1", api_key="TestAgent")
 script_dir = os.path.dirname(os.path.abspath(__file__))
 server_params = StdioServerParameters(
     command="python3", 
-    args=[os.path.join(script_dir, "tools_server.py")],
+    args=[os.path.join(os.path.dirname(script_dir), "tools", "tools_server.py")],
     env={**os.environ, 'MEMORY_PATH': MEMORY_PATH}
 )
 
 # Initialize memory system
 memory = VectorMemory(storage_path=MEMORY_PATH)
+
+def extract_final_response(text):
+    """Extract only the final user-facing response from structured output"""
+    if not text:
+        return ""
+    
+    # Try structured format (gpt-oss, nemotron with channels)
+    final_pattern = r'<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)'
+    final_match = re.search(final_pattern, text, re.DOTALL)
+    
+    if final_match:
+        return final_match.group(1).strip()
+    
+    # Try alternative message format (some nemotron configs)
+    message_pattern = r'<\|start\|>assistant.*?<\|message\|>(.*?)(?:<\|end\|>|$)'
+    message_matches = re.findall(message_pattern, text, re.DOTALL)
+    
+    if message_matches:
+        # Get last message (usually final response)
+        return message_matches[-1].strip()
+    
+    # Try simple assistant tag (fallback for standard templates)
+    simple_pattern = r'<\|assistant\|>(.*?)(?:<\||\Z)'
+    simple_match = re.search(simple_pattern, text, re.DOTALL)
+    
+    if simple_match:
+        return simple_match.group(1).strip()
+    
+    # No special tokens found - return as-is
+    if '<|' not in text:
+        return text.strip()
+    
+    # Fallback: aggressively remove all special tokens
+    cleaned = text
+    cleaned = re.sub(r'<\|start\|>.*?<\|message\|>', '', cleaned)
+    cleaned = re.sub(r'<\|end\|>', '', cleaned)
+    cleaned = re.sub(r'<\|channel\|>\w+', '', cleaned)
+    cleaned = re.sub(r'<\|constrain\|>\w+', '', cleaned)
+    cleaned = re.sub(r'to=functions\.\w+', '', cleaned)
+    cleaned = re.sub(r'<\|.*?\|>', '', cleaned)  # Remove any remaining special tokens
+    
+    return cleaned.strip()
 
 async def run_agent():
     print("--- MCP Agent Connecting... ---")
@@ -51,30 +99,6 @@ async def run_agent():
             # The Chat Loop
             history = []
             
-            # Enhanced system prompt with parallel tool calling emphasis
-            system_prompt = """You are an intelligent assistant with long-term memory.
-
-CORE OPERATING RULES:
-1. PARALLEL TOOL USE: You must call MULTIPLE tools in a single turn whenever possible. Do not wait for a tool result to call the next unrelated tool.
-   - Bad: [call tool A] -> wait -> [call tool B]
-   - Good: [call tool A, call tool B] -> process results
-2. MEMORY FIRST: Always search memory [recall_memory()] before answering personal questions.
-3. PROACTIVE STORAGE: If the user states a fact, preference, or goal, save it immediately [store_memory()].
-
-MEMORY GUIDELINES:
-- Types: "identity" (who they are), "preference" (likes/dislikes), "fact" (info), "goal" (plans).
-- Strategy: When asked "Who am I?", search for "name", "job", "location" simultaneously.
-
-EXAMPLES:
-- User: "I love Python but hate Java."
-  -> Tool Calls: [store_memory("Loves Python", "preference"), store_memory("Hates Java", "preference")]
-- User: "Forget where I live."
-  -> Tool Calls: [recall_memory("home address"), forget_memory(found_id)]
-- User: "What's my name and the weather in Tokyo?"
-  -> Tool Calls: [recall_memory("my name"), get_weather("Tokyo")]
-
-IMPORTANT: Always call all needed tools in ONE response, not across multiple responses."""
-            
             while True:
                 user_input = input("\nYou: ")
                 if user_input.lower() in ["quit", "exit"]: 
@@ -85,7 +109,7 @@ IMPORTANT: Always call all needed tools in ONE response, not across multiple res
                     handle_memory_command(user_input)
                     continue
                 
-                messages = [{"role": "system", "content": system_prompt}]
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                 messages.extend(history)
                 messages.append({"role": "user", "content": user_input})
 
@@ -105,14 +129,16 @@ IMPORTANT: Always call all needed tools in ONE response, not across multiple res
                     # Show how many tools are being called
                     num_calls = len(msg.tool_calls)
                     if num_calls > 1:
-                        print(f"[AGENT]  {num_calls} parallel tool calls:")
+                        print(f"[AGENT] {num_calls} parallel tool calls:")
                     else:
-                        print(f"[AGENT]  Tool call:")
+                        print(f"[AGENT] Tool call:")
                     
                     # Add assistant's tool call message to history
+                    assistant_content = extract_final_response(msg.content or "")
+
                     history.append({
                         "role": "assistant",
-                        "content": msg.content or "",
+                        "content": assistant_content,
                         "tool_calls": [
                             {
                                 "id": tc.id,
@@ -160,20 +186,25 @@ IMPORTANT: Always call all needed tools in ONE response, not across multiple res
                     
                     # Generate final response with all tool results
                     if num_calls > 1:
-                        print(f"[AGENT]  Synthesizing response from {num_calls} results...")
+                        print(f"[AGENT] Synthesizing response from {num_calls} results...")
                     
                     final = llm_client.chat.completions.create(
                         model="TestAgent-model",
-                        messages=history  # Contains all tool results now
+                        messages=history
                     )
                     
-                    assistant_response = final.choices[0].message.content
+                    # Extract and clean the final response
+                    raw_response = final.choices[0].message.content
+                    assistant_response = extract_final_response(raw_response)
+                    
                     print(f"Agent: {assistant_response}")
                     history.append({"role": "assistant", "content": assistant_response})
                     
                 else:
-                    # No tool calls, direct response
-                    assistant_response = msg.content
+                    # No tool calls - extract and clean direct response
+                    raw_response = msg.content
+                    assistant_response = extract_final_response(raw_response)
+                    
                     print(f"Agent: {assistant_response}")
                     history.append({"role": "assistant", "content": assistant_response})
 
@@ -209,7 +240,7 @@ def handle_memory_command(command: str):
         print("[AGENT] Exported to memories/memories_export.txt")
     
     elif parts[1] == "clear":
-        confirm = input("[AGENT]  Are you sure you want to clear ALL memories? (yes/no): ")
+        confirm = input("[AGENT] Are you sure you want to clear ALL memories? (yes/no): ")
         if confirm.lower() == "yes":
             memory.clear()
             print("[AGENT] All memories cleared")
@@ -217,11 +248,11 @@ def handle_memory_command(command: str):
             print("[AGENT] Cancelled")
     
     else:
-        print("\n📚 Memory commands:")
+        print("\nMemory commands:")
         print("  /memory stats          - Show memory statistics")
         print("  /memory search <query> - Search memories")
         print("  /memory export         - Export memories to text file")
         print("  /memory clear          - Clear all memories (requires confirmation)")
 
 if __name__ == "__main__":
-    asyncio.run(run_agent())    
+    asyncio.run(run_agent())
