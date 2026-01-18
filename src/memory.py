@@ -20,25 +20,30 @@ class VectorMemory:
             model_name: HuggingFace model for embeddings (default is fast and lightweight)
             storage_path: Where to save/load memories
         """
-        print(f"[MEMORY] Loading embedding model: {model_name}...")
+        print(f"[MEMORY] Loading embedding model: {model_name}...", file=sys.stderr)
 
         # Try to load offline first (Fast & No Internet required)
         try:
             self.encoder = SentenceTransformer(model_name, device='cpu', local_files_only=True)
-            print("  > Model loaded from local cache (Offline mode)")
+            print("  > Model loaded from local cache (Offline mode)", file=sys.stderr)
         except Exception:
             # If missing, download it (First run only)
-            print("  > Model not found locally. Downloading from Hugging Face...")
+            print("  > Model not found locally. Downloading from Hugging Face...", file=sys.stderr)
             self.encoder = SentenceTransformer(model_name, device='cpu')
 
         self.storage_path = storage_path
         self.memories = []  # List of memory objects
         self.dimension = self.encoder.get_sentence_embedding_dimension()
         
+        # Create storage directory if it doesn't exist
+        storage_dir = os.path.dirname(storage_path)
+        if storage_dir and not os.path.exists(storage_dir):
+            os.makedirs(storage_dir, exist_ok=True)
+        
         # Try to load existing memories
         self.load()
         
-        print(f"[MEMORY] Memory system ready ({len(self.memories)} existing memories)")
+        print(f"[MEMORY] Memory system ready ({len(self.memories)} existing memories)", file=sys.stderr)
     
     def add(self, text: str, metadata: Optional[Dict] = None, memory_type: str = "conversation"):
         """
@@ -49,6 +54,8 @@ class VectorMemory:
             metadata: Optional additional info (user_id, tags, etc.)
             memory_type: Type of memory (conversation, fact, preference, etc.)
         """
+        self.load()
+
         # Generate embedding
         vector = self.encoder.encode(text, convert_to_numpy=True)
         
@@ -64,7 +71,7 @@ class VectorMemory:
         }
         
         self.memories.append(memory)
-        print(f"[MEMORY] Added memory #{memory['id']}: {text[:60]}...")
+        print(f"[MEMORY] Added memory #{memory['id']}: {text[:60]}...", file=sys.stderr)
         
         # Save immediately to prevent data loss
         self.save()
@@ -82,6 +89,8 @@ class VectorMemory:
         Returns:
             List of relevant memories with scores
         """
+        self.load()
+
         if not self.memories:
             return []
         
@@ -123,6 +132,9 @@ class VectorMemory:
                 "timestamp": memory["timestamp"]
             })
         
+        # Save immediately to prevent data loss
+        self.save()
+        
         return results
     
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
@@ -150,38 +162,15 @@ class VectorMemory:
     
     def delete(self, memory_id: int) -> bool:
         """Delete a memory by ID"""
+        self.load()
         for i, memory in enumerate(self.memories):
             if memory["id"] == memory_id:
                 deleted = self.memories.pop(i)
-                print(f"[MEMORY] Deleted memory #{memory_id}: {deleted['text'][:60]}...")
+                print(f"[MEMORY] Deleted memory #{memory_id}: {deleted['text'][:60]}...", file=sys.stderr)
                 self.save()
                 return True
         return False
-    
-    def prune(self, max_age_days: int = 30, min_access_count: int = 0):
-        """
-        Remove old, unused memories.
         
-        Args:
-            max_age_days: Delete memories older than this
-            min_access_count: Keep memories accessed at least this many times
-        """
-        current_time = time.time()
-        max_age_seconds = max_age_days * 24 * 60 * 60
-        
-        original_count = len(self.memories)
-        
-        self.memories = [
-            m for m in self.memories
-            if (current_time - m["timestamp"] < max_age_seconds) or 
-               (m["access_count"] >= min_access_count)
-        ]
-        
-        pruned = original_count - len(self.memories)
-        if pruned > 0:
-            print(f"[MEMORY] Pruned {pruned} old memories")
-            self.save()
-    
     def get_stats(self) -> Dict:
         """Get memory system statistics"""
         if not self.memories:
@@ -226,9 +215,9 @@ class VectorMemory:
                 os.remove(self.storage_path)
             os.rename(temp_path, self.storage_path)
             
-            print(f"[MEMORY] Saved {len(self.memories)} memories to {self.storage_path}")
+            print(f"[MEMORY] Saved {len(self.memories)} memories to {self.storage_path}", file=sys.stderr)
         except Exception as e:
-            print(f"[MEMORY] Failed to save memories: {e}")
+            print(f"[MEMORY] Failed to save memories: {e}", file=sys.stderr)
             # Clean up temp file if it exists
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -236,24 +225,24 @@ class VectorMemory:
     def load(self):
         """Load memories from disk with error handling"""
         if not os.path.exists(self.storage_path):
-            print(f"[MEMORY] No existing memories found, starting fresh")
+            print(f"[MEMORY] No existing memories found, starting fresh", file=sys.stderr)
             self.memories = []
             return
         
         try:
             with open(self.storage_path, 'rb') as f:
                 self.memories = pickle.load(f)
-            print(f"[MEMORY] Loaded {len(self.memories)} memories from {self.storage_path}")
+            print(f"[MEMORY] Loaded {len(self.memories)} memories from {self.storage_path}", file=sys.stderr)
         except (EOFError, pickle.UnpicklingError) as e:
-            print(f"[MEMORY] Corrupted memory file: {e}")
+            print(f"[MEMORY] Corrupted memory file: {e}", file=sys.stderr)
             # Backup corrupted file
             backup_path = self.storage_path + ".corrupted"
             if os.path.exists(self.storage_path):
                 os.rename(self.storage_path, backup_path)
-                print(f"[MEMORY] Backed up corrupted file to {backup_path}")
+                print(f"[MEMORY] Backed up corrupted file to {backup_path}", file=sys.stderr)
             self.memories = []
         except Exception as e:
-            print(f"[MEMORY] Failed to load memories: {e}")
+            print(f"[MEMORY] Failed to load memories: {e}", file=sys.stderr)
             self.memories = []
     
     def clear(self):
@@ -261,10 +250,15 @@ class VectorMemory:
         self.memories = []
         if os.path.exists(self.storage_path):
             os.remove(self.storage_path)
-        print("[MEMORY] All memories cleared")
+        print("[MEMORY] All memories cleared", file=sys.stderr)
     
-    def export_txt(self, filepath: str = "memories_export.txt"):
+    def export_txt(self, filepath: str = "memories/memories_export.txt"):
         """Export memories to a readable text file"""
+        # Create directory if it doesn't exist
+        export_dir = os.path.dirname(filepath)
+        if export_dir and not os.path.exists(export_dir):
+            os.makedirs(export_dir, exist_ok=True)
+            
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write("=== AGENT MEMORIES ===\n\n")
             
@@ -278,4 +272,4 @@ class VectorMemory:
                     f.write(f"Metadata: {memory['metadata']}\n")
                 f.write("\n" + "-"*80 + "\n\n")
         
-        print(f"[MEMORY] Exported {len(self.memories)} memories to {filepath}")
+        print(f"[MEMORY] Exported {len(self.memories)} memories to {filepath}", file=sys.stderr)

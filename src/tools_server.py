@@ -24,10 +24,10 @@ EMAIL_PASS = os.getenv('EMAIL_PASS')
 IMAP_SERVER = os.getenv('IMAP_SERVER')
 
 # Initialize memory system directly in the tools server
-MEMORY_PATH = os.getenv('MEMORY_PATH', 'agent_memory.pkl')
+MEMORY_PATH = os.getenv('MEMORY_PATH', 'memories/agent_memory.pkl')
 memory_system = VectorMemory(storage_path=MEMORY_PATH)
 
-print(f"[TOOLS SERVER] Memory system initialized with {len(memory_system.memories)} memories")
+print(f"[TOOLS SERVER] Memory system initialized with {len(memory_system.memories)} memories", file=sys.stderr)
 
 # --- Memory Tools ---
 
@@ -64,14 +64,14 @@ def store_memory(text: str, memory_type: str = "fact", importance: str = "normal
         return f"[MEMORY TOOL ERROR] Failed to store: {e}"
     
 @mcp.tool()
-def recall_memory(query: str, memory_type: str = None, top_k: int = 3) -> str:
+def recall_memory(query: str, memory_type: str = "", top_k: int = 3) -> str:
     """
     Search long-term memory for relevant information.
     Use this when you need context about the user's previous conversations, preferences, or facts.
     
     Args:
         query: What to search for (be specific about what information you need)
-        memory_type: Optional filter - "fact", "preference", "identity", "goal", or None for all types
+        memory_type: Optional filter - "fact", "preference", "identity", "goal", or "" for all types
         top_k: How many relevant memories to retrieve (1-5)
     
     Returns:
@@ -80,33 +80,34 @@ def recall_memory(query: str, memory_type: str = None, top_k: int = 3) -> str:
     Examples:
         - User asks "What's my name?" -> recall_memory("user's name", "identity", 1)
         - User asks "What do I like?" -> recall_memory("user likes preferences", "preference", 3)
-        - User asks about past conversation -> recall_memory("previous topic", None, 5)
+        - User asks about past conversation -> recall_memory("previous topic", "", 5)
     """
     try:
         # Reload from disk to get latest memories
         memory_system.load()
         
-        results = memory_system.search(query, top_k=top_k, memory_type=memory_type, min_score=0.3)
+        mem_type = memory_type if memory_type else None        
+        results = memory_system.search(query, top_k=top_k, memory_type=mem_type, min_score=0.3)
         
         if not results:
             return f"[MEMORY TOOL] No relevant memories found for '{query}'"
         
         output = f"[MEMORY TOOL] Found {len(results)} relevant memories:\n\n"
         for i, mem in enumerate(results, 1):
-            output += f"{i}. [{mem['type']}] {mem['text']} (score: {mem['score']:.2f})\n"
+            output += f"{i}. [ID: {mem['id']}] [{mem['type']}] {mem['text']} (score: {mem['score']:.2f})\n"
         
         return output
     except Exception as e:
         return f"[MEMORY TOOL ERROR] Failed to recall: {e}"
     
 @mcp.tool()
-def list_recent_memories(count: int = 5, memory_type: str = None) -> str:
+def list_recent_memories(count: int = 5, memory_type: str = "") -> str:
     """
     List the most recent memories stored.
     
     Args:
         count: How many recent memories to show (1-10)
-        memory_type: Optional filter by type
+        memory_type: Optional filter by type (or "" for all types)
     
     Returns:
         List of recent memories
@@ -135,7 +136,7 @@ def list_recent_memories(count: int = 5, memory_type: str = None) -> str:
             else:
                 age_str = f"{age/60:.1f}h ago"
             
-            output += f"{i}. [{mem['type']}] {mem['text']} ({age_str})\n"
+            output += f"{i}. [ID: {mem['id']}] [{mem['type']}] {mem['text']} ({age_str})\n"
         
         return output
     except Exception as e:
@@ -170,7 +171,7 @@ def forget_memory(memory_id: int) -> str:
 @mcp.tool()
 def play_youtube(topic: str) -> str:
     """Searches YouTube for the topic and plays the first video found."""
-    print(f"[TOOL] Searching YouTube for: {topic}...")
+    print(f"[TOOL] Searching YouTube for: {topic}...", file=sys.stderr)
     fallback_url = f"https://www.youtube.com/results?search_query={topic.replace(' ', '+')}"
     
     try:
@@ -195,13 +196,13 @@ def play_youtube(topic: str) -> str:
             title = video.get('title', 'Unknown Title')
             video_url = video.get('url') or f"https://www.youtube.com/watch?v={video['id']}"
             
-            print(f"[TOOL] Playing: {title}")
+            print(f"[TOOL] Playing: {title}", file=sys.stderr)
             webbrowser.open(video_url)
             
             return f"Success: Now playing '{title}' in the browser."
     
     except Exception as e:
-        print(f"[TOOL ERROR] {e}")
+        print(f"[TOOL ERROR] {e}", file=sys.stderr)
         webbrowser.open(fallback_url)
         return f"I encountered an error trying to play the video directly ({str(e)}), so I opened the search results instead."
 
@@ -209,7 +210,7 @@ def play_youtube(topic: str) -> str:
 @mcp.tool()
 def read_latest_email(count: int = 1) -> str:
     """Fetches the latest N emails from your inbox. Returns sender, subject, and a preview of the body text."""
-    print(f"[TOOL] Fetching last {count} email(s)...")
+    print(f"[TOOL] Fetching last {count} email(s)...", file=sys.stderr)
     
     try:
         # Connect and authenticate
@@ -269,7 +270,7 @@ def read_latest_email(count: int = 1) -> str:
                     body_preview += "..."
                 
                 results.append(
-                    f"📩 FROM: {sender}\n"
+                    f"FROM: {sender}\n"
                     f"SUBJECT: {subject}\n"
                     f"BODY: {body_preview}"
                 )
@@ -280,14 +281,14 @@ def read_latest_email(count: int = 1) -> str:
     except imaplib.IMAP4.error as e:
         return f"IMAP error: {e}. Check your email/password and IMAP settings."
     except Exception as e:
-        print(f"[TOOL ERROR] {e}")
+        print(f"[TOOL ERROR] {e}", file=sys.stderr)
         return f"Unexpected error: {e}"
 
 
 @mcp.tool()
 def get_weather(city: str) -> str:
     """Get the current weather for a specific city using wttr.in."""
-    print(f"[TOOL] Checking weather for: {city}...")
+    print(f"[TOOL] Checking weather for: {city}...", file=sys.stderr)
     try:
         # format=3 gives a one-line output like: "Paris: ⛅️ +12°C"
         url = f"https://wttr.in/{city}?format=3"
@@ -298,14 +299,14 @@ def get_weather(city: str) -> str:
         else:
             return "Could not fetch weather data."
     except Exception as e:
-        print(f"[TOOL ERROR] {e}")
+        print(f"[TOOL ERROR] {e}", file=sys.stderr)
         return f"Error connecting to weather service: {e}"
     
 
 @mcp.tool()
 def get_system_stats() -> str:
     """Checks the current CPU and RAM usage of the computer."""
-    print(f"[TOOL] Fetching CPU and RAM stats...")
+    print(f"[TOOL] Fetching CPU and RAM stats...", file=sys.stderr)
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -317,7 +318,7 @@ def get_system_stats() -> str:
         return (f"CPU Usage: {cpu_percent}%\n"
                 f"RAM Usage: {used_mem_gb:.1f}GB / {total_mem_gb:.1f}GB ({memory.percent}%)")
     except Exception as e:
-        print(f"[TOOL ERROR] {e}")
+        print(f"[TOOL ERROR] {e}", file=sys.stderr)
         return f"Unexpected error: {e}"
 
 

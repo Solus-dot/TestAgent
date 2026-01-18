@@ -5,7 +5,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 # Set environment variable for memory path (so tools_server.py uses same file)
-MEMORY_PATH = "agent_memory.pkl"
+MEMORY_PATH = 'memories/agent_memory.pkl'
 os.environ['MEMORY_PATH'] = MEMORY_PATH
 
 # Import after setting env var
@@ -19,10 +19,10 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 server_params = StdioServerParameters(
     command="python3", 
     args=[os.path.join(script_dir, "tools_server.py")],
-    env={**os.environ, 'MEMORY_PATH': MEMORY_PATH}  # Pass env var to subprocess
+    env={**os.environ, 'MEMORY_PATH': MEMORY_PATH}
 )
 
-# Initialize memory system (same file as tools_server)
+# Initialize memory system
 memory = VectorMemory(storage_path=MEMORY_PATH)
 
 async def run_agent():
@@ -47,32 +47,33 @@ async def run_agent():
                 })
             
             print(f"Loaded {len(openai_tools)} tools from MCP server.")
-            print(f"Memory tools: store_memory, recall_memory, list_recent_memories, forget_memory")
             
             # The Chat Loop
             history = []
             
-            # Enhanced system prompt
-            system_prompt = """You are a helpful assistant with access to tools, including a long-term memory system.
+            # Enhanced system prompt with parallel tool calling emphasis
+            system_prompt = """You are an intelligent assistant with long-term memory.
 
-MEMORY USAGE GUIDELINES:
-- When users share personal information (name, preferences, facts), use store_memory() to remember it
-- Before answering questions about the user, use recall_memory() to check what you know
-- Be proactive: if something seems worth remembering, store it without asking
-- When recalling, search with specific queries (e.g., "user's name" not just "name")
+CORE OPERATING RULES:
+1. PARALLEL TOOL USE: You must call MULTIPLE tools in a single turn whenever possible. Do not wait for a tool result to call the next unrelated tool.
+   - Bad: [call tool A] -> wait -> [call tool B]
+   - Good: [call tool A, call tool B] -> process results
+2. MEMORY FIRST: Always search memory [recall_memory()] before answering personal questions.
+3. PROACTIVE STORAGE: If the user states a fact, preference, or goal, save it immediately [store_memory()].
 
-MEMORY TYPES:
-- identity: Name, age, job, location, personal details
-- preference: Likes, dislikes, favorites, opinions
-- fact: General information, skills, experiences
-- goal: User's objectives, projects, learning goals
+MEMORY GUIDELINES:
+- Types: "identity" (who they are), "preference" (likes/dislikes), "fact" (info), "goal" (plans).
+- Strategy: When asked "Who am I?", search for "name", "job", "location" simultaneously.
 
-Examples:
-- User: "My name is Alex" → store_memory("User's name is Alex", "identity", "high")
-- User: "What's my name?" → recall_memory("user's name", "identity", 1) first, then respond
-- User: "I love Python" → store_memory("User loves Python programming", "preference", "normal")
+EXAMPLES:
+- User: "I love Python but hate Java."
+  -> Tool Calls: [store_memory("Loves Python", "preference"), store_memory("Hates Java", "preference")]
+- User: "Forget where I live."
+  -> Tool Calls: [recall_memory("home address"), forget_memory(found_id)]
+- User: "What's my name and the weather in Tokyo?"
+  -> Tool Calls: [recall_memory("my name"), get_weather("Tokyo")]
 
-Always use recall_memory() before claiming you don't know something about the user."""
+IMPORTANT: Always call all needed tools in ONE response, not across multiple responses."""
             
             while True:
                 user_input = input("\nYou: ")
@@ -90,7 +91,7 @@ Always use recall_memory() before claiming you don't know something about the us
 
                 # Ask LLM
                 response = llm_client.chat.completions.create(
-                    model="local-model",
+                    model="TestAgent-model",
                     messages=messages,
                     tools=openai_tools,
                     tool_choice="auto"
@@ -101,9 +102,17 @@ Always use recall_memory() before claiming you don't know something about the us
                 
                 # Handle tool calls
                 if msg.tool_calls:
+                    # Show how many tools are being called
+                    num_calls = len(msg.tool_calls)
+                    if num_calls > 1:
+                        print(f"[AGENT]  {num_calls} parallel tool calls:")
+                    else:
+                        print(f"[AGENT]  Tool call:")
+                    
+                    # Add assistant's tool call message to history
                     history.append({
                         "role": "assistant",
-                        "content": msg.content,
+                        "content": msg.content or "",
                         "tool_calls": [
                             {
                                 "id": tc.id,
@@ -116,60 +125,54 @@ Always use recall_memory() before claiming you don't know something about the us
                         ]
                     })
                     
-                    for tool_call in msg.tool_calls:
+                    # Execute ALL tool calls and collect results
+                    for i, tool_call in enumerate(msg.tool_calls, 1):
                         fname = tool_call.function.name
                         fargs = tool_call.function.arguments
                         
-                        print(f"⚙️ MCP Call: {fname}({fargs})")
+                        # Show tool call with index if multiple
+                        if num_calls > 1:
+                            print(f"[AGENT] [{i}/{num_calls}] {fname}({fargs})")
+                        else:
+                            print(f"[AGENT] {fname}({fargs})")
 
                         # Execute via MCP Protocol
-                        # We parse the arguments into a dict
                         import json
                         args_dict = json.loads(fargs)
                         
                         result = await session.call_tool(fname, arguments=args_dict)
-                        
-                        # Feed result back to LLM
-                        # MCP returns a list of content (text/images). We grab the text.
                         tool_output = result.content[0].text
-                        print(f"  > Result: {tool_output[:200]}...")
+                        
+                        # Show abbreviated result
+                        if num_calls > 1:
+                            preview = tool_output[:80] + "..." if len(tool_output) > 80 else tool_output
+                            print(f"[AGENT] {preview}")
+                        else:
+                            preview = tool_output[:150] + "..." if len(tool_output) > 150 else tool_output
+                            print(f"[AGENT] Result: {preview}")
 
+                        # Add tool result to history
                         history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "content": tool_output
                         })
-
-                    # Final LLM Response
+                    
+                    # Generate final response with all tool results
+                    if num_calls > 1:
+                        print(f"[AGENT]  Synthesizing response from {num_calls} results...")
+                    
                     final = llm_client.chat.completions.create(
-                        model="local-model",
-                        messages=messages + [
-                            {
-                                "role": "assistant",
-                                "content": msg.content,
-                                "tool_calls": [
-                                    {
-                                        "id": tc.id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": tc.function.name,
-                                            "arguments": tc.function.arguments
-                                        }
-                                    } for tc in msg.tool_calls
-                                ]
-                            }
-                        ] + [
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": result.content[0].text
-                            } for tc in msg.tool_calls
-                        ]
+                        model="TestAgent-model",
+                        messages=history  # Contains all tool results now
                     )
+                    
                     assistant_response = final.choices[0].message.content
                     print(f"Agent: {assistant_response}")
                     history.append({"role": "assistant", "content": assistant_response})
+                    
                 else:
+                    # No tool calls, direct response
                     assistant_response = msg.content
                     print(f"Agent: {assistant_response}")
                     history.append({"role": "assistant", "content": assistant_response})
@@ -183,7 +186,7 @@ def handle_memory_command(command: str):
     
     if len(parts) == 1 or parts[1] == "stats":
         stats = memory.get_stats()
-        print("\n📊 Memory Statistics:")
+        print("\n[AGENT] Memory Statistics:")
         print(f"Total memories: {stats['total_memories']}")
         if stats['total_memories'] > 0:
             print(f"Oldest: {stats['oldest']['text']} ({stats['oldest']['age_days']:.1f} days old)")
@@ -194,24 +197,31 @@ def handle_memory_command(command: str):
     elif parts[1] == "search" and len(parts) > 2:
         query = " ".join(parts[2:])
         results = memory.search(query, top_k=5)
-        print(f"\n🔍 Search results for '{query}':")
-        for r in results:
-            print(f"  [{r['score']:.2f}] {r['text']}")
+        print(f"\n[AGENT] Search results for '{query}':")
+        if results:
+            for r in results:
+                print(f"  [{r['score']:.2f}] {r['text']}")
+        else:
+            print(f"  No results found")
     
     elif parts[1] == "export":
         memory.export_txt()
+        print("[AGENT] Exported to memories/memories_export.txt")
     
     elif parts[1] == "clear":
-        confirm = input("Are you sure you want to clear ALL memories? (yes/no): ")
+        confirm = input("[AGENT]  Are you sure you want to clear ALL memories? (yes/no): ")
         if confirm.lower() == "yes":
             memory.clear()
+            print("[AGENT] All memories cleared")
+        else:
+            print("[AGENT] Cancelled")
     
     else:
-        print("\nMemory commands:")
-        print("  /memory stats - Show memory statistics")
+        print("\n📚 Memory commands:")
+        print("  /memory stats          - Show memory statistics")
         print("  /memory search <query> - Search memories")
-        print("  /memory export - Export memories to text file")
-        print("  /memory clear - Clear all memories")
+        print("  /memory export         - Export memories to text file")
+        print("  /memory clear          - Clear all memories (requires confirmation)")
 
 if __name__ == "__main__":
-    asyncio.run(run_agent())
+    asyncio.run(run_agent())    

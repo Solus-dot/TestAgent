@@ -18,3 +18,4 @@ __pycache__/
 
 # Ignore the memory file
 agent_memory.pkl
+memories_export.txt

@@ -2,9 +2,10 @@
 Python-based AI Agent for tool-calls.
 
 ## Overview
-Agent uses a lmstudio-cli server for inference and Model Context Protocol (MCP) for basic tool calls.\
+Agent uses a **lmstudio-cli** server for inference and **Model Context Protocol (MCP)** for basic tool calls.\
 Small project to test agentic capabilities of small language models and versatility of MCP.\
-Mostly vibecoded AI slop, but not bad for something as small as this.
+Mostly vibecoded AI slop, but not bad for something as small as this.\
+Works best with **GPT-OSS-20B**, but any model with any OpenAI chat completion compatible model and template. 
 
 ## Install and Run:
 ### Prerequisites
