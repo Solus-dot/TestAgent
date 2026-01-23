@@ -36,6 +36,9 @@ def extract_final_response(text):
     if not text:
         return ""
     
+    # Remove <think>...</think> blocks (Nemotron reasoning)
+    text = re.sub(r'^(.*?)\</think>', '', text, flags=re.DOTALL)
+    
     # Try structured format (gpt-oss, nemotron with channels)
     final_pattern = r'<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)'
     final_match = re.search(final_pattern, text, re.DOTALL)
@@ -48,7 +51,6 @@ def extract_final_response(text):
     message_matches = re.findall(message_pattern, text, re.DOTALL)
     
     if message_matches:
-        # Get last message (usually final response)
         return message_matches[-1].strip()
     
     # Try simple assistant tag (fallback for standard templates)
@@ -59,7 +61,7 @@ def extract_final_response(text):
         return simple_match.group(1).strip()
     
     # No special tokens found - return as-is
-    if '<|' not in text:
+    if '<|' not in text and '<think>' not in text:
         return text.strip()
     
     # Fallback: aggressively remove all special tokens
@@ -69,10 +71,9 @@ def extract_final_response(text):
     cleaned = re.sub(r'<\|channel\|>\w+', '', cleaned)
     cleaned = re.sub(r'<\|constrain\|>\w+', '', cleaned)
     cleaned = re.sub(r'to=functions\.\w+', '', cleaned)
-    cleaned = re.sub(r'<\|.*?\|>', '', cleaned)  # Remove any remaining special tokens
+    cleaned = re.sub(r'<\|.*?\|>', '', cleaned)
     
     return cleaned.strip()
-
 async def run_agent():
     print("--- MCP Agent Connecting... ---")
     
@@ -109,34 +110,38 @@ async def run_agent():
                     handle_memory_command(user_input)
                     continue
                 
+                # Add user message to history first
+                history.append({"role": "user", "content": user_input})
+                
+                # Build messages for API call
                 messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                 messages.extend(history)
-                messages.append({"role": "user", "content": user_input})
 
                 # Ask LLM
                 response = llm_client.chat.completions.create(
                     model="TestAgent-model",
                     messages=messages,
                     tools=openai_tools,
-                    tool_choice="auto"
+                    tool_choice="auto",
+                    extra_body={
+                        "enable_thinking": False
+                    }
                 )
 
                 msg = response.choices[0].message
-                history.append({"role": "user", "content": user_input})
                 
-                # Handle tool calls
-                if msg.tool_calls:
-                    # Show how many tools are being called
+                # Loop to handle tool call chaining
+                while msg.tool_calls:
                     num_calls = len(msg.tool_calls)
                     if num_calls > 1:
                         print(f"[AGENT] {num_calls} parallel tool calls:")
                     else:
                         print(f"[AGENT] Tool call:")
                     
-                    # Add assistant's tool call message to history
                     assistant_content = extract_final_response(msg.content or "")
 
-                    history.append({
+                    # Create assistant message object
+                    assistant_msg = {
                         "role": "assistant",
                         "content": assistant_content,
                         "tool_calls": [
@@ -149,9 +154,12 @@ async def run_agent():
                                 }
                             } for tc in msg.tool_calls
                         ]
-                    })
+                    }
                     
-                    # Execute ALL tool calls and collect results
+                    # Add to history
+                    history.append(assistant_msg)
+                    
+                    # Execute ALL tool calls
                     for i, tool_call in enumerate(msg.tool_calls, 1):
                         fname = tool_call.function.name
                         fargs = tool_call.function.arguments
@@ -177,36 +185,41 @@ async def run_agent():
                             preview = tool_output[:150] + "..." if len(tool_output) > 150 else tool_output
                             print(f"[AGENT] Result: {preview}")
 
-                        # Add tool result to history
-                        history.append({
+                        # Create tool message object
+                        tool_msg = {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "content": tool_output
-                        })
+                        }
+                        
+                        # Add to history
+                        history.append(tool_msg)
                     
-                    # Generate final response with all tool results
                     if num_calls > 1:
                         print(f"[AGENT] Synthesizing response from {num_calls} results...")
                     
-                    final = llm_client.chat.completions.create(
+                    # Rebuild messages with updated history
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    messages.extend(history)
+                    
+                    # Get next response
+                    response = llm_client.chat.completions.create(
                         model="TestAgent-model",
-                        messages=history
+                        messages=messages,
+                        tools=openai_tools,
+                        tool_choice="auto",
+                        extra_body={
+                            "enable_thinking": False
+                        }
                     )
+                    msg = response.choices[0].message
                     
-                    # Extract and clean the final response
-                    raw_response = final.choices[0].message.content
-                    assistant_response = extract_final_response(raw_response)
-                    
-                    print(f"Agent: {assistant_response}")
-                    history.append({"role": "assistant", "content": assistant_response})
-                    
-                else:
-                    # No tool calls - extract and clean direct response
-                    raw_response = msg.content
-                    assistant_response = extract_final_response(raw_response)
-                    
-                    print(f"Agent: {assistant_response}")
-                    history.append({"role": "assistant", "content": assistant_response})
+                # Final Text Response (no more tool calls)
+                raw_response = msg.content
+                assistant_response = extract_final_response(raw_response)
+                
+                print(f"Agent: {assistant_response}")
+                history.append({"role": "assistant", "content": assistant_response})
 
 def handle_memory_command(command: str):
     """Handle special memory commands"""

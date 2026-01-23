@@ -73,8 +73,7 @@ for line in sys.stdin:
         log_type = data.get("data", {}).get("type", "unknown")
         
         if log_type == "llm.prediction.input":
-            print("\n" + "="*10)
-            print("PROMPT INPUT")
+            print("\nPROMPT INPUT")
             print("="*10)
             
             input_text = data["data"].get("input", "")
@@ -104,35 +103,29 @@ for line in sys.stdin:
                 print("-" * 10)
                 print(sections['tools'])
             
-            # Conversation history
-            if sections['user'] or sections['assistant']:
-                print("\n💬 CONVERSATION HISTORY:")
+            # Conversation history (exclude the current/last message)
+            if sections['user'] and len(sections['user']) > 1:
+                print("\nCONVERSATION HISTORY:")
                 print("-" * 10)
                 
-                # Show last 3 exchanges
-                max_history = 3
-                user_msgs = sections['user'][-max_history:]
-                asst_msgs = sections['assistant'][-max_history:]
-                
-                for i in range(max(len(user_msgs), len(asst_msgs))):
-                    if i < len(user_msgs):
-                        print(f"\nUser: {user_msgs[i]}")
-                    if i < len(asst_msgs):
-                        print(f"Assistant: {asst_msgs[i]}")
-            
+                # Exclude the current message from users
+                historical_users = sections['user'][:-1]
+                historical_assistants = sections['assistant']
+
+                for i in range(len(historical_users)):
+                    print(f"\nUser: {historical_users[i]}")
+                    print(f"Assistant: {historical_assistants[i]}")
+
             # Current user message (always show the latest)
             if sections['user']:
-                print("\n" + "="*10)
-                print("CURRENT USER MESSAGE:")
+                print("\nCURRENT USER MESSAGE:")
                 print("="*10)
                 print(f"{sections['user'][-1]}")
         
         elif log_type == "llm.prediction.output":
             stats = data["data"].get("stats", {})
             output_text = data["data"].get("output", "")
-            
-            print("\n" + "="*10)
-            print("MODEL OUTPUT")
+            print("\nMODEL OUTPUT")
             print("="*10)
             
             sections = parse_output_sections(output_text)
@@ -164,8 +157,7 @@ for line in sys.stdin:
                 print(clean_text(output_text))
             
             # Performance stats
-            print("\n" + "="*10)
-            print("PERFORMANCE STATS")
+            print("\nPERFORMANCE STATS")
             print("="*10)
             print(f"Speed: {stats.get('tokensPerSecond', 0):.1f} tok/s")
             print(f"Time to first token: {stats.get('timeToFirstTokenSec', 0):.3f}s")
