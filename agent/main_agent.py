@@ -37,6 +37,8 @@ memory = VectorMemory(storage_path=MEMORY_PATH)
 GREY = "\033[90m"
 CYAN = "\033[96m"
 YELLOW = "\033[93m"
+LIGHT_BLUE = "\033[94m"
+LIGHT_GREEN = "\033[92m"
 RESET = "\033[0m"
 
 def debug_print(label, data):
@@ -115,7 +117,7 @@ async def run_agent():
             history = []
             
             while True:
-                user_input = input("\nYou: ")
+                user_input = input(f"{LIGHT_BLUE}\nYou: {RESET}")
                 if user_input.lower() in ["quit", "exit"]: break
                 
                 if user_input.lower().startswith("/memory"):
@@ -222,7 +224,7 @@ async def run_agent():
                         print(f"\n{GREY}[REASONING]\n{thinking_content}\n[END REASONING]{RESET}\n")
 
                     assistant_response = extract_final_response(content)
-                    print(f"Agent: {assistant_response}")
+                    print(f"{LIGHT_GREEN}Agent: {assistant_response}{RESET}")
                     
                     print_ollama_metrics(response)
                     history.append({"role": "assistant", "content": assistant_response})
