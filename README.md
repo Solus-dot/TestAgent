@@ -2,7 +2,7 @@
 Python-based AI Agent for tool-calls.
 
 ## Overview
-Agent uses a **lmstudio-cli** server for inference and **Model Context Protocol (MCP)** for basic tool calls.\
+Agent uses a **Ollama** server for inference and **Model Context Protocol (MCP)** for basic tool calls.\
 Small project to test agentic capabilities of small language models and versatility of MCP.\
 Mostly vibecoded AI slop, but not bad for something as small as this.\
 Works best with **GPT-OSS-20B**, but any model with any OpenAI chat completion compatible model and template. 
@@ -11,7 +11,7 @@ Works best with **GPT-OSS-20B**, but any model with any OpenAI chat completion c
 ### Prerequisites
 * **Python 3.11+** (`python3 --version`)
 * **uv** (Modern Python package manager). [Install uv](https://github.com/astral-sh/uv)
-* **LM Studio** (With CLI enabled). Run `lms bootstrap` in your terminal if you haven't already.
+* **Ollama** (With CLI enabled).
 
 ### 1. Installation
 Clone the repo and set up the environment in one command using `uv`:
@@ -47,6 +47,7 @@ You need two terminal windows open.
 ```bash
 ./scripts/llmServer.sh
 # Follow the prompts to select a model (e.g., Llama 3, Qwen)
+# And context size
 ```
 
 **Terminal 2 - The Agent Client:** This runs your Python agent which connects to the server and handles tools.
