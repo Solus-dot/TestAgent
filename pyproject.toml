@@ -10,6 +10,7 @@ dependencies = [
     "mcp>=1.25.0",
     "mlx-lm>=0.29.1",
     "numpy>=2.4.1",
+    "ollama>=0.6.1",
     "openai>=2.14.0",
     "psutil>=7.2.1",
     "pydantic>=2.12.5",

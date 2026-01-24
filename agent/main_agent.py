@@ -2,14 +2,15 @@ import asyncio
 import os
 import re
 import sys
-from openai import OpenAI
+import json
+from ollama import Client
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Set environment variable for memory path (so tools_server.py uses same file)
+# Set environment variable for memory path 
 MEMORY_PATH = 'memories/agent_memory.pkl'
 os.environ['MEMORY_PATH'] = MEMORY_PATH
 
@@ -17,10 +18,11 @@ os.environ['MEMORY_PATH'] = MEMORY_PATH
 from core.memory import VectorMemory
 from core.prompts import SYSTEM_PROMPT
 
-# Connect to the Llama Server
-llm_client = OpenAI(base_url="http://127.0.0.1:6767/v1", api_key="TestAgent")
+# --- Configuration ---
+DEBUG_MODE = False  # Set to True to see full inputs/outputs
 
-# Define connection to the MCP Server
+llm_client = Client(host='http://127.0.0.1:6767')
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 server_params = StdioServerParameters(
     command="python3", 
@@ -31,51 +33,62 @@ server_params = StdioServerParameters(
 # Initialize memory system
 memory = VectorMemory(storage_path=MEMORY_PATH)
 
+# --- ANSI Color Codes ---
+GREY = "\033[90m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
+def debug_print(label, data):
+    """Helper to print raw data if DEBUG_MODE is on"""
+    if DEBUG_MODE:
+        print(f"\n{YELLOW}--- DEBUG: {label} ---{RESET}")
+        try:
+            if hasattr(data, 'model_dump'):
+                print(json.dumps(data.model_dump(), indent=2, default=str))
+            elif hasattr(data, '__dict__'):
+                print(json.dumps(data.__dict__, indent=2, default=str))
+            else:
+                print(json.dumps(data, indent=2, default=str))
+        except Exception:
+            print(str(data))
+        print(f"{YELLOW}-----------------------{RESET}\n")
+
+def extract_thought(text):
+    if not text: return None
+    think_pattern = r'<think>(.*?)</think>'
+    match = re.search(think_pattern, text, re.DOTALL)
+    return match.group(1).strip() if match else None
+
 def extract_final_response(text):
-    """Extract only the final user-facing response from structured output"""
-    if not text:
-        return ""
+    if not text: return ""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     
-    # Remove <think>...</think> blocks (Nemotron reasoning)
-    text = re.sub(r'^(.*?)\</think>', '', text, flags=re.DOTALL)
-    
-    # Try structured format (gpt-oss, nemotron with channels)
     final_pattern = r'<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)'
-    final_match = re.search(final_pattern, text, re.DOTALL)
+    match = re.search(final_pattern, text, re.DOTALL)
+    if match: return match.group(1).strip()
     
-    if final_match:
-        return final_match.group(1).strip()
-    
-    # Try alternative message format (some nemotron configs)
-    message_pattern = r'<\|start\|>assistant.*?<\|message\|>(.*?)(?:<\|end\|>|$)'
-    message_matches = re.findall(message_pattern, text, re.DOTALL)
-    
-    if message_matches:
-        return message_matches[-1].strip()
-    
-    # Try simple assistant tag (fallback for standard templates)
-    simple_pattern = r'<\|assistant\|>(.*?)(?:<\||\Z)'
-    simple_match = re.search(simple_pattern, text, re.DOTALL)
-    
-    if simple_match:
-        return simple_match.group(1).strip()
-    
-    # No special tokens found - return as-is
-    if '<|' not in text and '<think>' not in text:
-        return text.strip()
-    
-    # Fallback: aggressively remove all special tokens
-    cleaned = text
-    cleaned = re.sub(r'<\|start\|>.*?<\|message\|>', '', cleaned)
-    cleaned = re.sub(r'<\|end\|>', '', cleaned)
-    cleaned = re.sub(r'<\|channel\|>\w+', '', cleaned)
-    cleaned = re.sub(r'<\|constrain\|>\w+', '', cleaned)
-    cleaned = re.sub(r'to=functions\.\w+', '', cleaned)
-    cleaned = re.sub(r'<\|.*?\|>', '', cleaned)
-    
+    if '<|' not in text: return text.strip()
+    cleaned = re.sub(r'<\|.*?\|>', '', text)
     return cleaned.strip()
+
+def print_ollama_metrics(response):
+    total_dur = getattr(response, 'total_duration', 0)
+    load_dur = getattr(response, 'load_duration', 0)
+    eval_count = getattr(response, 'eval_count', 0)
+    eval_dur = getattr(response, 'eval_duration', 1)
+    
+    if total_dur == 0: return
+
+    tks = eval_count / (eval_dur / 1e9)
+    
+    print(f"{CYAN}\nMetrics: {total_dur/1e9:.2f}s total (Load: {load_dur/1e9:.2f}s)")
+    print(f"Speed:   {eval_count} tokens @ {tks:.2f} t/s{CYAN}")
+
 async def run_agent():
-    print("--- MCP Agent Connecting... ---")
+    print("--- MCP Agent Connecting (Native Ollama) ---")
+    if DEBUG_MODE:
+        print(f"{YELLOW}DEBUG MODE IS ON{RESET}")
     
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -83,10 +96,9 @@ async def run_agent():
             await session.initialize()
             mcp_tools_list = await session.list_tools()
             
-            # Convert MCP tools format to OpenAI tools format
-            openai_tools = []
+            agent_tools = []
             for tool in mcp_tools_list.tools:
-                openai_tools.append({
+                agent_tools.append({
                     "type": "function",
                     "function": {
                         "name": tool.name,
@@ -95,131 +107,125 @@ async def run_agent():
                     }
                 })
             
-            print(f"Loaded {len(openai_tools)} tools from MCP server.")
+            print(f"Loaded {len(agent_tools)} tools.")
             
-            # The Chat Loop
+            # Print Tools Schema for Debugging
+            debug_print("TOOLS SCHEMA", agent_tools)
+
             history = []
             
             while True:
                 user_input = input("\nYou: ")
-                if user_input.lower() in ["quit", "exit"]: 
-                    break
+                if user_input.lower() in ["quit", "exit"]: break
                 
-                # Special memory commands
                 if user_input.lower().startswith("/memory"):
                     handle_memory_command(user_input)
                     continue
                 
-                # Add user message to history first
-                history.append({"role": "user", "content": user_input})
-                
-                # Build messages for API call
                 messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                 messages.extend(history)
+                messages.append({"role": "user", "content": user_input})
 
-                # Ask LLM
-                response = llm_client.chat.completions.create(
+                debug_print("INPUT MESSAGES", messages)
+
+                # Call Ollama Native API
+                response = llm_client.chat(
                     model="TestAgent-model",
                     messages=messages,
-                    tools=openai_tools,
-                    tool_choice="auto",
-                    extra_body={
-                        "enable_thinking": False
-                    }
+                    think="high",
+                    tools=agent_tools,
                 )
 
-                msg = response.choices[0].message
-                
-                # Loop to handle tool call chaining
-                while msg.tool_calls:
-                    num_calls = len(msg.tool_calls)
-                    if num_calls > 1:
-                        print(f"[AGENT] {num_calls} parallel tool calls:")
-                    else:
-                        print(f"[AGENT] Tool call:")
-                    
-                    assistant_content = extract_final_response(msg.content or "")
+                debug_print("RAW RESPONSE", response)
 
-                    # Create assistant message object
-                    assistant_msg = {
+                msg = response.message
+                content = msg.content or ""
+                tool_calls = msg.tool_calls or []
+                
+                thinking_content = getattr(msg, 'thinking', None)
+                if not thinking_content:
+                    thinking_content = extract_thought(content)
+
+                history.append({"role": "user", "content": user_input})
+                
+                if tool_calls:
+                    print(f"[AGENT] {len(tool_calls)} tool calls...")
+                    
+                    assistant_content = extract_final_response(content)
+                    
+                    history_tool_calls = []
+                    for tc in tool_calls:
+                        tc_dict = tc.model_dump() if hasattr(tc, 'model_dump') else tc
+                        history_tool_calls.append({
+                            "type": "function",
+                            "function": {
+                                "name": tc_dict['function']['name'],
+                                "arguments": tc_dict['function']['arguments']
+                            }
+                        })
+
+                    history.append({
                         "role": "assistant",
                         "content": assistant_content,
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments
-                                }
-                            } for tc in msg.tool_calls
-                        ]
-                    }
+                        "tool_calls": history_tool_calls
+                    })
                     
-                    # Add to history
-                    history.append(assistant_msg)
-                    
-                    # Execute ALL tool calls
-                    for i, tool_call in enumerate(msg.tool_calls, 1):
-                        fname = tool_call.function.name
-                        fargs = tool_call.function.arguments
-                        
-                        # Show tool call with index if multiple
-                        if num_calls > 1:
-                            print(f"[AGENT] [{i}/{num_calls}] {fname}({fargs})")
+                    for i, tool_call in enumerate(tool_calls, 1):
+                        if hasattr(tool_call, 'function'):
+                            fname = tool_call.function.name
+                            fargs = tool_call.function.arguments
                         else:
-                            print(f"[AGENT] {fname}({fargs})")
-
-                        # Execute via MCP Protocol
-                        import json
-                        args_dict = json.loads(fargs)
+                            fname = tool_call['function']['name']
+                            fargs = tool_call['function']['arguments']
                         
-                        result = await session.call_tool(fname, arguments=args_dict)
+                        print(f"[AGENT] Executing {fname}({fargs})")
+                        
+                        result = await session.call_tool(fname, arguments=fargs)
                         tool_output = result.content[0].text
                         
-                        # Show abbreviated result
-                        if num_calls > 1:
-                            preview = tool_output[:80] + "..." if len(tool_output) > 80 else tool_output
-                            print(f"[AGENT] {preview}")
-                        else:
-                            preview = tool_output[:150] + "..." if len(tool_output) > 150 else tool_output
-                            print(f"[AGENT] Result: {preview}")
+                        preview = tool_output[:100] + "..." if len(tool_output) > 100 else tool_output
+                        print(f"[AGENT] Result: {preview}")
 
-                        # Create tool message object
-                        tool_msg = {
+                        history.append({
                             "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": tool_output
-                        }
-                        
-                        # Add to history
-                        history.append(tool_msg)
+                            "content": tool_output,
+                            "name": fname 
+                        })
                     
-                    if num_calls > 1:
-                        print(f"[AGENT] Synthesizing response from {num_calls} results...")
-                    
-                    # Rebuild messages with updated history
-                    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                    messages.extend(history)
-                    
-                    # Get next response
-                    response = llm_client.chat.completions.create(
+                    print(f"[AGENT] Synthesizing final response...")
+                    debug_print("SYNTHESIS INPUT", history)
+
+                    final_response = llm_client.chat(
                         model="TestAgent-model",
-                        messages=messages,
-                        tools=openai_tools,
-                        tool_choice="auto",
-                        extra_body={
-                            "enable_thinking": False
-                        }
+                        messages=history
                     )
-                    msg = response.choices[0].message
+                    debug_print("SYNTHESIS RESPONSE", final_response)
                     
-                # Final Text Response (no more tool calls)
-                raw_response = msg.content
-                assistant_response = extract_final_response(raw_response)
-                
-                print(f"Agent: {assistant_response}")
-                history.append({"role": "assistant", "content": assistant_response})
+                    final_msg = final_response.message
+                    raw_response = final_msg.content
+                    
+                    final_thinking = getattr(final_msg, 'thinking', None)
+                    if not final_thinking:
+                        final_thinking = extract_thought(raw_response)
+                        
+                    if final_thinking:
+                        print(f"\n{GREY}[REASONING]\n{final_thinking}\n[END REASONING]{RESET}\n")
+
+                    assistant_response = extract_final_response(raw_response)
+                    print(f"Agent: {assistant_response}")
+                    
+                    print_ollama_metrics(final_response)
+                    history.append({"role": "assistant", "content": assistant_response})
+                    
+                else:
+                    if thinking_content:
+                        print(f"\n{GREY}[REASONING]\n{thinking_content}\n[END REASONING]{RESET}\n")
+
+                    assistant_response = extract_final_response(content)
+                    print(f"Agent: {assistant_response}")
+                    
+                    print_ollama_metrics(response)
+                    history.append({"role": "assistant", "content": assistant_response})
 
 def handle_memory_command(command: str):
     """Handle special memory commands"""

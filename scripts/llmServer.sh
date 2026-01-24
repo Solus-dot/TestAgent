@@ -4,43 +4,66 @@
 PORT="6767"
 DEFAULT_CTX="8192"
 
-# 1. Check for LMS CLI
-if ! command -v lms &> /dev/null; then
-    echo "Error: 'lms' command not found."
-    echo "Please install LM Studio and run: 'lms bootstrap'"
+export OLLAMA_HOST="127.0.0.1:$PORT"
+export OLLAMA_DEBUG=1
+export OLLAMA_FLASH_ATTENTION=1
+
+# 1. Check for Ollama CLI
+if ! command -v ollama &> /dev/null; then
+    echo "Error: 'ollama' command not found."
+    echo "Please install Ollama from https://ollama.com"
     exit 1
 fi
 
 # 2. Start/Ensure Server is Running
-echo "--- LM Studio Server Setup ---"
-lms server start --port "$PORT" > /dev/null 2>&1
+echo "--- Ollama Server Setup ---"
 
-# 3. Unload old models (Clean slate)
-lms unload --all > /dev/null 2>&1
+if ! curl -s "http://127.0.0.1:$PORT" > /dev/null; then
+    echo "Starting Ollama server on port $PORT..."
+    ollama serve &
+    SERVER_PID=$!
+    
+    echo "Waiting for server to become responsive..."
+    while ! curl -s "http://127.0.0.1:$PORT" > /dev/null; do
+        sleep 1
+    done
+else
+    echo "Ollama server is already running on port $PORT."
+fi
 
-# 4. Ask for Context Length
+# 3. Model Selection
+echo ""
+echo "Select your base model (e.g., llama3.1, mistral, deepseek-r1):"
+read -p "Model Name (default: gpt-oss:20b): " BASE_MODEL
+BASE_MODEL=${BASE_MODEL:-gpt-oss:20b}
+
+# 4. Context Size Selection
 read -p "Enter context length (default: $DEFAULT_CTX): " ctx_input
 CTX_LENGTH=${ctx_input:-$DEFAULT_CTX}
 
-# 5. Load Model (Interactive)
-# We run 'lms load' without a model name, which triggers the menu.
-# We pass the flags so they apply to whatever model you pick.
+# 5. Pull & Create Custom Model
+echo "Checking/Pulling base model '$BASE_MODEL'..."
+ollama pull "$BASE_MODEL"
+
+echo "Creating 'TestAgent-model' with context window size $CTX_LENGTH..."
+# Create a temporary Modelfile to set the parameter
+echo "FROM $BASE_MODEL" > Modelfile.temp
+echo "PARAMETER num_ctx $CTX_LENGTH" >> Modelfile.temp
+echo "PARAMETER temperature 0.6" >> Modelfile.temp
+echo "PARAMETER top_k 20" >> Modelfile.temp
+
+# Create the model alias with the config
+ollama create TestAgent-model -f Modelfile.temp
+rm Modelfile.temp
+
 echo ""
-echo "Select your model from the menu below:"
-echo "-------------------------------------"
+echo "Server is ready at http://127.0.0.1:$PORT"
+echo "Model 'TestAgent-model' is active (Context: $CTX_LENGTH)."
+echo "(Press Ctrl+C to stop watching this script)"
 
-lms load \
-    --context-length "$CTX_LENGTH" \
-    --gpu max \
-    --identifier "TestAgent-Model"
-
-# 6. Stream Logs
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "Server is ready at http://127.0.0.1:$PORT"
-    echo "(Ctrl+C will stop watching logs, but server keeps running)"
-    echo "--- Server Logs ---"
-    lms log stream --source model --stats --json --filter input,output | .venv/bin/python -u utils/format_logs.py
+# 6. Keep script alive
+if [ -n "$SERVER_PID" ]; then
+    wait $SERVER_PID
 else
-    echo "Failed to load model."
+    tail -f /dev/null
 fi
