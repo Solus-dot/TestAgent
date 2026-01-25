@@ -6,6 +6,8 @@ import time
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Optional
 
+from utils.ANSI import *
+
 class VectorMemory:
     """
     Simple but powerful vector memory system for the agent.
@@ -150,6 +152,7 @@ class VectorMemory:
     
     def get_by_id(self, memory_id: int) -> Optional[Dict]:
         """Retrieve a specific memory by ID"""
+        self.load()
         for memory in self.memories:
             if memory["id"] == memory_id:
                 return {
@@ -173,6 +176,7 @@ class VectorMemory:
         
     def get_stats(self) -> Dict:
         """Get memory system statistics"""
+        self.load()
         if not self.memories:
             return {
                 "total_memories": 0,
@@ -254,6 +258,7 @@ class VectorMemory:
     
     def export_txt(self, filepath: str = "memories/memories_export.txt"):
         """Export memories to a readable text file"""
+        self.load()
         # Create directory if it doesn't exist
         export_dir = os.path.dirname(filepath)
         if export_dir and not os.path.exists(export_dir):
@@ -273,3 +278,80 @@ class VectorMemory:
                 f.write("\n" + "-"*80 + "\n\n")
         
         print(f"[MEMORY] Exported {len(self.memories)} memories to {filepath}", file=sys.stderr)
+
+    def handle_memory_command(self, command: str):
+        """Handle special memory commands"""
+        # Reload memory to get latest from disk
+        self.load()
+        
+        parts = command.split()
+        
+        if len(parts) == 1 or parts[1] == "stats":
+            stats = self.get_stats()
+            print(f"\n{CYAN}[MEMORY DEBUG] Statistics:{RESET}")
+            print(f"  Total memories: {stats['total_memories']}")
+            if stats['total_memories'] > 0:
+                print(f"  Oldest: {stats['oldest']['text'][:50]}... ({stats['oldest']['age_days']:.1f} days old)")
+                print(f"  Newest: {stats['newest']['text'][:50]}... ({stats['newest']['age_days']:.1f} days old)")
+                print(f"  Most accessed: {stats['most_accessed']['text'][:50]}... ({stats['most_accessed']['count']} times)")
+                print(f"  Types: {stats['types']}")
+        
+        elif parts[1] == "search" and len(parts) > 2:
+            query = " ".join(parts[2:])
+            results = self.search(query, top_k=5)
+            print(f"\n{CYAN}[MEMORY DEBUG] Search results for '{query}':{RESET}")
+            if results:
+                for r in results:
+                    print(f"  [{r['score']:.2f}] {r['text'][:80]}...")
+            else:
+                print(f"  No results found")
+        
+        elif parts[1] == "list" or parts[1] == "recent":
+            count = int(parts[2]) if len(parts) > 2 else 10
+            import time
+            
+            sorted_memories = sorted(self.memories, key=lambda x: x["timestamp"], reverse=True)[:count]
+            
+            print(f"\n{CYAN}[MEMORY DEBUG] {len(sorted_memories)} most recent memories:{RESET}")
+            for i, mem in enumerate(sorted_memories, 1):
+                age = (time.time() - mem["timestamp"]) / 60  # minutes
+                if age < 60:
+                    age_str = f"{age:.0f}m ago"
+                elif age < 1440:
+                    age_str = f"{age/60:.1f}h ago"
+                else:
+                    age_str = f"{age/1440:.1f}d ago"
+                
+                print(f"  {i}. [ID:{mem['id']}] [{mem['type']}] {mem['text'][:60]}... ({age_str})")
+        
+        elif parts[1] == "export":
+            self.export_txt()
+            print(f"{CYAN}[MEMORY DEBUG] Exported to memories/memories_export.txt{RESET}")
+        
+        elif parts[1] == "clear":
+            confirm = input(f"{YELLOW}[MEMORY DEBUG] Are you sure you want to clear ALL memories? (yes/no): {RESET}")
+            if confirm.lower() == "yes":
+                self.clear()
+                print(f"{CYAN}[MEMORY DEBUG] All memories cleared{RESET}")
+            else:
+                print(f"{CYAN}[MEMORY DEBUG] Cancelled{RESET}")
+        
+        elif parts[1] == "delete" and len(parts) > 2:
+            try:
+                mem_id = int(parts[2])
+                success = self.delete(mem_id)
+                if success:
+                    print(f"{CYAN}[MEMORY DEBUG] Deleted memory #{mem_id}{RESET}")
+                else:
+                    print(f"{YELLOW}[MEMORY DEBUG] Memory #{mem_id} not found{RESET}")
+            except ValueError:
+                print(f"{YELLOW}[MEMORY DEBUG] Invalid memory ID{RESET}")
+        
+        else:
+            print(f"\n{CYAN}Memory Debug Commands:{RESET}")
+            print(f"  /memory stats              - Show memory statistics")
+            print(f"  /memory search <query>     - Search memories")
+            print(f"  /memory list [count]       - List recent memories (default: 10)")
+            print(f"  /memory delete <id>        - Delete a specific memory by ID")
+            print(f"  /memory export             - Export memories to text file")
+            print(f"  /memory clear              - Clear all memories (requires confirmation)")

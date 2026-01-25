@@ -14,14 +14,33 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 MEMORY_PATH = 'memories/agent_memory.pkl'
 os.environ['MEMORY_PATH'] = MEMORY_PATH
 
-# Import after setting env var
+# Import after setting environmental variables
 from core.memory import VectorMemory
 from core.prompts import SYSTEM_PROMPT
+from utils.ANSI import *
+from utils.model_detection import get_model_info, supports_extended_thinking
 
 # --- Configuration ---
 DEBUG_MODE = False  # Set to True to see full inputs/outputs
 
 llm_client = Client(host='http://127.0.0.1:6767')
+
+BASE_MODEL = get_model_info(llm_client)
+SUPPORTS_EXTENDED_THINKING = supports_extended_thinking(BASE_MODEL)
+print(f"[AGENT] Model supports extended thinking (think='high')") if SUPPORTS_EXTENDED_THINKING else print(f"[AGENT] Model does not support extended thinking")
+
+
+# Debug: Print full model info if DEBUG_MODE is on
+if DEBUG_MODE:
+    try:
+        full_info = llm_client.show('TestAgent-model')
+        print(f"\n{YELLOW}--- FULL MODEL INFO ---{RESET}")
+        print(f"Family: {full_info.get('details', {}).get('family', 'N/A')}")
+        print(f"Parameter Size: {full_info.get('details', {}).get('parameter_size', 'N/A')}")
+        print(f"Template preview: {full_info.get('template', '')[:200]}...")
+        print(f"{YELLOW}----------------------{RESET}\n")
+    except:
+        pass
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 server_params = StdioServerParameters(
@@ -30,16 +49,13 @@ server_params = StdioServerParameters(
     env={**os.environ, 'MEMORY_PATH': MEMORY_PATH}
 )
 
-# Initialize memory system
-memory = VectorMemory(storage_path=MEMORY_PATH)
+# Initialize memory system (for /memory commands only)
+# Suppress ALL initialization messages to avoid duplication with tools server
+import io
+import contextlib
 
-# --- ANSI Color Codes ---
-GREY = "\033[90m"
-CYAN = "\033[96m"
-YELLOW = "\033[93m"
-LIGHT_BLUE = "\033[94m"
-LIGHT_GREEN = "\033[92m"
-RESET = "\033[0m"
+with contextlib.redirect_stderr(io.StringIO()):
+    memory = VectorMemory(storage_path=MEMORY_PATH)
 
 def debug_print(label, data):
     """Helper to print raw data if DEBUG_MODE is on"""
@@ -121,7 +137,7 @@ async def run_agent():
                 if user_input.lower() in ["quit", "exit"]: break
                 
                 if user_input.lower().startswith("/memory"):
-                    handle_memory_command(user_input)
+                    memory.handle_memory_command(user_input)
                     continue
                 
                 messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -131,12 +147,17 @@ async def run_agent():
                 debug_print("INPUT MESSAGES", messages)
 
                 # Call Ollama Native API
-                response = llm_client.chat(
-                    model="TestAgent-model",
-                    messages=messages,
-                    think="high",
-                    tools=agent_tools,
-                )
+                chat_params = {
+                    "model": "TestAgent-model",
+                    "messages": messages,
+                    "tools": agent_tools,
+                }
+                
+                # Only add think parameter if model supports it
+                if SUPPORTS_EXTENDED_THINKING:
+                    chat_params["think"] = "high"
+                
+                response = llm_client.chat(**chat_params)
 
                 debug_print("RAW RESPONSE", response)
 
@@ -197,10 +218,15 @@ async def run_agent():
                     print(f"[AGENT] Synthesizing final response...")
                     debug_print("SYNTHESIS INPUT", history)
 
-                    final_response = llm_client.chat(
-                        model="TestAgent-model",
-                        messages=history
-                    )
+                    synthesis_params = {
+                        "model": "TestAgent-model",
+                        "messages": history
+                    }
+                    
+                    if SUPPORTS_EXTENDED_THINKING:
+                        synthesis_params["think"] = "high"
+                    
+                    final_response = llm_client.chat(**synthesis_params)
                     debug_print("SYNTHESIS RESPONSE", final_response)
                     
                     final_msg = final_response.message
@@ -228,52 +254,6 @@ async def run_agent():
                     
                     print_ollama_metrics(response)
                     history.append({"role": "assistant", "content": assistant_response})
-
-def handle_memory_command(command: str):
-    """Handle special memory commands"""
-    # Reload memory to get latest from disk
-    memory.load()
-    
-    parts = command.split()
-    
-    if len(parts) == 1 or parts[1] == "stats":
-        stats = memory.get_stats()
-        print("\n[AGENT] Memory Statistics:")
-        print(f"Total memories: {stats['total_memories']}")
-        if stats['total_memories'] > 0:
-            print(f"Oldest: {stats['oldest']['text']} ({stats['oldest']['age_days']:.1f} days old)")
-            print(f"Newest: {stats['newest']['text']} ({stats['newest']['age_days']:.1f} days old)")
-            print(f"Most accessed: {stats['most_accessed']['text']} ({stats['most_accessed']['count']} times)")
-            print(f"Types: {stats['types']}")
-    
-    elif parts[1] == "search" and len(parts) > 2:
-        query = " ".join(parts[2:])
-        results = memory.search(query, top_k=5)
-        print(f"\n[AGENT] Search results for '{query}':")
-        if results:
-            for r in results:
-                print(f"  [{r['score']:.2f}] {r['text']}")
-        else:
-            print(f"  No results found")
-    
-    elif parts[1] == "export":
-        memory.export_txt()
-        print("[AGENT] Exported to memories/memories_export.txt")
-    
-    elif parts[1] == "clear":
-        confirm = input("[AGENT] Are you sure you want to clear ALL memories? (yes/no): ")
-        if confirm.lower() == "yes":
-            memory.clear()
-            print("[AGENT] All memories cleared")
-        else:
-            print("[AGENT] Cancelled")
-    
-    else:
-        print("\nMemory commands:")
-        print("  /memory stats          - Show memory statistics")
-        print("  /memory search <query> - Search memories")
-        print("  /memory export         - Export memories to text file")
-        print("  /memory clear          - Clear all memories (requires confirmation)")
 
 if __name__ == "__main__":
     asyncio.run(run_agent())
