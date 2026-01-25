@@ -5,13 +5,13 @@ Python-based AI Agent for tool-calls.
 Agent uses a **Ollama** server for inference and **Model Context Protocol (MCP)** for basic tool calls.\
 Small project to test agentic capabilities of small language models and versatility of MCP.\
 Mostly vibecoded AI slop, but not bad for something as small as this.\
-Works best with **GPT-OSS-20B**, but any model with any OpenAI chat completion compatible model and template. 
+Works best with **GPT-OSS-20B**, but any model with any model with reasoning and especially tool-calling capabilities. 
 
 ## Install and Run:
 ### Prerequisites
 * **Python 3.11+** (`python3 --version`)
 * **uv** (Modern Python package manager). [Install uv](https://github.com/astral-sh/uv)
-* **Ollama** (With CLI enabled).
+* **Ollama** (With CLI enabled). [Install Ollama](https://github.com/ollama/ollama)
 
 ### 1. Installation
 Clone the repo and set up the environment in one command using `uv`:
