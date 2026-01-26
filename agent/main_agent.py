@@ -27,7 +27,7 @@ llm_client = Client(host='http://127.0.0.1:6767')
 
 BASE_MODEL = get_model_info(llm_client)
 SUPPORTS_EXTENDED_THINKING = supports_extended_thinking(BASE_MODEL)
-print(f"[AGENT] Model supports extended thinking (think='high')") if SUPPORTS_EXTENDED_THINKING else print(f"[AGENT] Model does not support extended thinking")
+print(f"{YELLOW}[AGENT]{RESET} Model supports extended thinking (think='high')") if SUPPORTS_EXTENDED_THINKING else print(f"{YELLOW}[AGENT]{RESET} Model does not support extended thinking")
 
 
 # Debug: Print full model info if DEBUG_MODE is on
@@ -104,7 +104,7 @@ def print_ollama_metrics(response):
     print(f"Speed:   {eval_count} tokens @ {tks:.2f} t/s{CYAN}")
 
 async def run_agent():
-    print("--- MCP Agent Connecting (Native Ollama) ---")
+    print("--- MCP Agent Connecting ---")
     if DEBUG_MODE:
         print(f"{YELLOW}DEBUG MODE IS ON{RESET}")
     
@@ -172,7 +172,7 @@ async def run_agent():
                 history.append({"role": "user", "content": user_input})
                 
                 if tool_calls:
-                    print(f"[AGENT] {len(tool_calls)} tool calls...")
+                    print(f"{YELLOW}[AGENT]{RESET} {len(tool_calls)} tool calls...")
                     
                     assistant_content = extract_final_response(content)
                     
@@ -201,13 +201,13 @@ async def run_agent():
                             fname = tool_call['function']['name']
                             fargs = tool_call['function']['arguments']
                         
-                        print(f"[AGENT] Executing {fname}({fargs})")
+                        print(f"{YELLOW}[AGENT]{RESET} Executing {fname}({fargs})")
                         
                         result = await session.call_tool(fname, arguments=fargs)
                         tool_output = result.content[0].text
                         
                         preview = tool_output[:100] + "..." if len(tool_output) > 100 else tool_output
-                        print(f"[AGENT] Result: {preview}")
+                        print(f"{YELLOW}[AGENT]{RESET} Result: {preview}")
 
                         history.append({
                             "role": "tool",
@@ -215,7 +215,7 @@ async def run_agent():
                             "name": fname 
                         })
                     
-                    print(f"[AGENT] Synthesizing final response...")
+                    print(f"{YELLOW}[AGENT]{RESET} Synthesizing final response...")
                     debug_print("SYNTHESIS INPUT", history)
 
                     synthesis_params = {
@@ -237,17 +237,17 @@ async def run_agent():
                         final_thinking = extract_thought(raw_response)
                         
                     if final_thinking:
-                        print(f"\n{GREY}[REASONING]\n{final_thinking}\n[END REASONING]{RESET}\n")
+                        print(f"\n{GREY}{ITALIC}[REASONING]\n{final_thinking}\n[END REASONING]{RESET}\n")
 
                     assistant_response = extract_final_response(raw_response)
-                    print(f"Agent: {assistant_response}")
+                    print(f"{LIGHT_GREEN}Agent: {assistant_response}{RESET}")
                     
                     print_ollama_metrics(final_response)
                     history.append({"role": "assistant", "content": assistant_response})
                     
                 else:
                     if thinking_content:
-                        print(f"\n{GREY}[REASONING]\n{thinking_content}\n[END REASONING]{RESET}\n")
+                        print(f"\n{GREY}{ITALIC}[REASONING]\n{thinking_content}\n[END REASONING]{RESET}\n")
 
                     assistant_response = extract_final_response(content)
                     print(f"{LIGHT_GREEN}Agent: {assistant_response}{RESET}")

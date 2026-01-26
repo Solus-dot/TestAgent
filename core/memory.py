@@ -22,7 +22,7 @@ class VectorMemory:
             model_name: HuggingFace model for embeddings (default is fast and lightweight)
             storage_path: Where to save/load memories
         """
-        print(f"[MEMORY] Loading embedding model: {model_name}...", file=sys.stderr)
+        print(f"{LIGHT_GREEN}[MEMORY]{RESET} Loading embedding model: {model_name}...", file=sys.stderr)
 
         # Try to load offline first (Fast & No Internet required)
         try:
@@ -45,7 +45,7 @@ class VectorMemory:
         # Try to load existing memories
         self.load()
         
-        print(f"[MEMORY] Memory system ready ({len(self.memories)} existing memories)", file=sys.stderr)
+        print(f"{LIGHT_GREEN}[MEMORY]{RESET} Memory system ready ({len(self.memories)} existing memories)", file=sys.stderr)
     
     def add(self, text: str, metadata: Optional[Dict] = None, memory_type: str = "conversation"):
         """
@@ -73,7 +73,7 @@ class VectorMemory:
         }
         
         self.memories.append(memory)
-        print(f"[MEMORY] Added memory #{memory['id']}: {text[:60]}...", file=sys.stderr)
+        print(f"{LIGHT_GREEN}[MEMORY]{RESET} Added memory #{memory['id']}: {text[:60]}...", file=sys.stderr)
         
         # Save immediately to prevent data loss
         self.save()
@@ -169,7 +169,7 @@ class VectorMemory:
         for i, memory in enumerate(self.memories):
             if memory["id"] == memory_id:
                 deleted = self.memories.pop(i)
-                print(f"[MEMORY] Deleted memory #{memory_id}: {deleted['text'][:60]}...", file=sys.stderr)
+                print(f"{LIGHT_GREEN}[MEMORY]{RESET} Deleted memory #{memory_id}: {deleted['text'][:60]}...", file=sys.stderr)
                 self.save()
                 return True
         return False
@@ -219,9 +219,9 @@ class VectorMemory:
                 os.remove(self.storage_path)
             os.rename(temp_path, self.storage_path)
             
-            print(f"[MEMORY] Saved {len(self.memories)} memories to {self.storage_path}", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} Saved {len(self.memories)} memories to {self.storage_path}", file=sys.stderr)
         except Exception as e:
-            print(f"[MEMORY] Failed to save memories: {e}", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} Failed to save memories: {e}", file=sys.stderr)
             # Clean up temp file if it exists
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -229,24 +229,24 @@ class VectorMemory:
     def load(self):
         """Load memories from disk with error handling"""
         if not os.path.exists(self.storage_path):
-            print(f"[MEMORY] No existing memories found, starting fresh", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} No existing memories found, starting fresh", file=sys.stderr)
             self.memories = []
             return
         
         try:
             with open(self.storage_path, 'rb') as f:
                 self.memories = pickle.load(f)
-            print(f"[MEMORY] Loaded {len(self.memories)} memories from {self.storage_path}", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} Loaded {len(self.memories)} memories from {self.storage_path}", file=sys.stderr)
         except (EOFError, pickle.UnpicklingError) as e:
-            print(f"[MEMORY] Corrupted memory file: {e}", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} Corrupted memory file: {e}", file=sys.stderr)
             # Backup corrupted file
             backup_path = self.storage_path + ".corrupted"
             if os.path.exists(self.storage_path):
                 os.rename(self.storage_path, backup_path)
-                print(f"[MEMORY] Backed up corrupted file to {backup_path}", file=sys.stderr)
+                print(f"{LIGHT_GREEN}[MEMORY]{RESET} Backed up corrupted file to {backup_path}", file=sys.stderr)
             self.memories = []
         except Exception as e:
-            print(f"[MEMORY] Failed to load memories: {e}", file=sys.stderr)
+            print(f"{LIGHT_GREEN}[MEMORY]{RESET} Failed to load memories: {e}", file=sys.stderr)
             self.memories = []
     
     def clear(self):
@@ -254,7 +254,7 @@ class VectorMemory:
         self.memories = []
         if os.path.exists(self.storage_path):
             os.remove(self.storage_path)
-        print("[MEMORY] All memories cleared", file=sys.stderr)
+        print("{LIGHT_GREEN}[MEMORY]{RESET} All memories cleared", file=sys.stderr)
     
     def export_txt(self, filepath: str = "memories/memories_export.txt"):
         """Export memories to a readable text file"""
@@ -277,7 +277,7 @@ class VectorMemory:
                     f.write(f"Metadata: {memory['metadata']}\n")
                 f.write("\n" + "-"*80 + "\n\n")
         
-        print(f"[MEMORY] Exported {len(self.memories)} memories to {filepath}", file=sys.stderr)
+        print(f"{LIGHT_GREEN}[MEMORY]{RESET} Exported {len(self.memories)} memories to {filepath}", file=sys.stderr)
 
     def handle_memory_command(self, command: str):
         """Handle special memory commands"""

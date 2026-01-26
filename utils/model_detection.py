@@ -1,4 +1,6 @@
 # Detect model capabilities
+from utils.ANSI import *
+
 def get_model_info(llm_client):
     """Get information about the current model to detect capabilities"""
     try:
@@ -40,14 +42,14 @@ def get_model_info(llm_client):
                 base_model = 'llama'
         
         if base_model:
-            print(f"[AGENT] Detected base model: {base_model}")
+            print(f"{YELLOW}[AGENT]{RESET} Detected base model: {base_model}")
         else:
-            print(f"[AGENT] Could not determine base model, defaulting to no extended thinking")
+            print(f"{YELLOW}[AGENT]{RESET} Could not determine base model, defaulting to no extended thinking")
         
         return base_model
         
     except Exception as e:
-        print(f"[AGENT] Could not detect model: {e}")
+        print(f"{YELLOW}[AGENT WARNING]{RESET} Could not detect model: {e}")
         return None
 
 # Determine if model supports extended thinking
